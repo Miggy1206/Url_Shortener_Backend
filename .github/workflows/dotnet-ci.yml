@@ -1,0 +1,31 @@
+name: .NET CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10
+
+      - name: Restore dependencies
+        run: dotnet restore src/UrlShortenerBackend/UrlShortenerBackend.csproj
+
+      - name: Build service
+        run: dotnet build src/UrlShortenerBackend/UrlShortenerBackend.csproj --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test test/UrlShortenerBackendTests/UrlShortenerBackendTests.csproj --configuration Release --no-restore --verbosity normal
