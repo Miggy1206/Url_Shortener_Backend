@@ -7,6 +7,7 @@ The focus is on understanding how distributed services are designed, tested, con
 ## Table of Contents
 
 - [Objectives](#objectives)
+- [Setup](#setup)
 - [API](#api)
 - [Tech Stack](#tech-stack)
 - [Project Status](#project-status)
@@ -24,7 +25,69 @@ The main objectives of this project are to:
 - Explore **AWS** and cloud-based infrastructure.
 - Understand concepts such as **load balancing, service communication, caching, concurrency, observability, and resilience**.
 - Apply software engineering principles around **architecture, maintainability, scalability, security, and performance**.
-- Progressively evolve the application towards a **scalable distributed system**.
+
+## Setup
+
+### Prerequisites
+
+- .NET 10 SDK
+- Docker Desktop
+- Git
+
+### Clone the Repository
+
+```bash
+git clone <repository-url>
+cd Url_Shortener_Backend
+```
+
+### Configure PostgreSQL
+
+Create a local `.env.local` file for Docker Compose:
+
+```env
+POSTGRES_DB=urlshortener
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=<your-password>
+```
+
+Start PostgreSQL:
+
+```bash
+docker compose --env-file .env.local up -d
+```
+
+### Configure the API
+
+Configure the local database connection using .NET User Secrets:
+
+```bash
+cd src/UrlShortenerBackend
+dotnet user-secrets init
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5433;Database=urlshortener;Username=postgres;Password=<your-password>"
+```
+
+### Apply Database Migrations
+
+```bash
+dotnet ef database update
+```
+
+### Run the API
+
+```bash
+dotnet run
+```
+
+Swagger can then be used to interact with the API.
+
+### Run Tests
+
+From the repository root:
+
+```bash
+dotnet test
+```
 
 ## API
 
