@@ -65,4 +65,37 @@ public class UrlsControllerIntegrationTests : IAsyncLifetime
         Assert.Equal("abc123", savedUrl.ShortCode);
         Assert.Equal(0, savedUrl.ClickCount);
     }
+
+    [Fact]
+    public async Task ShortCode_CannotBeDuplicated()
+    {
+        var options = new DbContextOptionsBuilder<UrlShortenerDbContext>()
+            .UseNpgsql(_postgres.GetConnectionString())
+            .Options;
+
+        await using var context = new UrlShortenerDbContext(options);
+
+        await context.Database.MigrateAsync();
+
+        context.Urls.Add(new Url
+        {
+            OriginalUrl = "https://example.com/1",
+            ShortCode = "abc123",
+            CreatedAt = DateTime.UtcNow,
+            ClickCount = 0
+        });
+
+        await context.SaveChangesAsync();
+
+        context.Urls.Add(new Url
+        {
+            OriginalUrl = "https://example.com/2",
+            ShortCode = "abc123",
+            CreatedAt = DateTime.UtcNow,
+            ClickCount = 0
+        });
+
+        await Assert.ThrowsAsync<DbUpdateException>(
+            () => context.SaveChangesAsync());
+    }
 }
