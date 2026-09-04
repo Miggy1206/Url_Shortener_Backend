@@ -99,6 +99,22 @@ POST /api/urls
 
 Creates a shortened URL from a provided original URL.
 
+**Short Code Uniqueness\***
+
+Each shortened URL is assigned a unique `ShortCode`. Uniqueness is enforced at both the application and database levels.
+
+The application checks whether a generated code already exists before saving, while PostgreSQL enforces uniqueness through a unique index:
+
+```csharp
+modelBuilder.Entity<Url>()
+    .HasIndex(x => x.ShortCode)
+    .IsUnique();
+```
+
+The database constraint provides the final guarantee against duplicate short codes, including concurrent requests or multiple application instances.
+
+Future: Add explicit handling for unique constraint violations, allowing the service to automatically generate and retry with a new short code if a collision occurs.
+
 ### Redirect to Url
 
 ```http

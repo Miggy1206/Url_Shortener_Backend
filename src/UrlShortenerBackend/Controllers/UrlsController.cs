@@ -20,7 +20,13 @@ public class UrlsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> ShortenUrl(ShortenUrlRequest request)
     {
-        var shortCode = Guid.NewGuid().ToString("N")[..6];
+        string shortCode;
+
+        do
+        {
+            shortCode = Guid.NewGuid().ToString("N")[..6];
+        }
+        while (await _context.Urls.AnyAsync(x => x.ShortCode == shortCode));
 
         var url = new Url
         {

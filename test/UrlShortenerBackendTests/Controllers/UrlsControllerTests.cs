@@ -101,6 +101,25 @@ public class UrlsControllerTests
     }
 
     [Fact]
+    public async Task ShortenUrl_MultipleUrls_GeneratesUniqueShortCodes()
+    {
+        await using var context = CreateDbContext();
+        var controller = CreateController(context);
+
+        for (var i = 0; i < 100; i++)
+        {
+            var request = new ShortenUrlRequest($"https://example.com/{i}");
+
+            await controller.ShortenUrl(request);
+        }
+
+        var urls = await context.Urls.ToListAsync();
+
+        Assert.Equal(100, urls.Count);
+        Assert.Equal(100, urls.Select(x => x.ShortCode).Distinct().Count());
+    }
+
+    [Fact]
     public async Task RedirectToUrl_WithExistingShortCode_ReturnsRedirect()
     {
         await using var context = CreateDbContext();
