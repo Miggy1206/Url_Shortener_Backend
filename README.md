@@ -11,9 +11,10 @@ The focus is on understanding how distributed services are designed, tested, con
 - [Objectives](#objectives)
 - [Setup](#setup)
 - [API](#api)
+- [Docker](#docker)
+- [CI/CD](#cicd)
 - [Tech Stack](#tech-stack)
 - [Testing](#testing)
-- [Docker](#docker)
 - [Project Status](#project-status)
 
 ## Objectives
@@ -199,6 +200,22 @@ The health endpoint can be checked with:
 curl http://localhost:8080/healthz
 ```
 
+## CI/CD
+
+GitHub Actions automatically validates changes through the following pipeline:
+
+1. Restore .NET dependencies.
+2. Build the application in Release configuration.
+3. Run the automated test suite.
+4. Build the Docker image.
+5. Scan the Docker image with **Trivy** for HIGH and CRITICAL vulnerabilities with available fixes.
+6. For pushes to `main`, authenticate to AWS using **GitHub Actions OIDC**.
+7. Publish the Docker image to **Amazon ECR**.
+
+AWS credentials are not stored in the repository. GitHub Actions assumes a dedicated IAM role using OIDC.
+
+Docker images pushed to ECR use the Git commit SHA as their tag, providing immutable and traceable image versions.
+
 ## Tech Stack
 
 | Technology            | Purpose                             |
@@ -213,8 +230,11 @@ curl http://localhost:8080/healthz
 | Testcontainers        | Database integration testing        |
 | Docker                | Containerisation                    |
 | Docker Compose        | Local service orchestration         |
+| Trivy                 | Container vulnerability scanning    |
+| GitHub Actions        | CI/CD automation                    |
+| AWS ECR               | Container image registry            |
 | Kubernetes            | Container orchestration _(planned)_ |
-| AWS                   | Cloud infrastructure _(planned)_    |
+| AWS                   | Cloud infrastructure                |
 
 ## Testing
 
@@ -248,7 +268,7 @@ dotnet test
 
 🚧 **In development**
 
-The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, and Docker-based infrastructure.
+The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, and AWS container registry integration.
 
 ### Completed
 
@@ -269,11 +289,17 @@ The initial API and database foundation have been implemented alongside a servic
 - Redis cache-aside implementation
 - Health checks
 - Swagger/OpenAPI
+- GitHub Actions CI pipeline
+- Docker image vulnerability scanning with Trivy
+- AWS CLI and development account setup
+- Amazon ECR repository
+- GitHub Actions OIDC authentication with AWS
+- Immutable Git SHA Docker image tagging
+- Automated Docker image publishing to ECR
 
 ### Planned
 
-- CI/CD pipeline
-- AWS deployment
+- AWS application deployment
 - Kubernetes deployment
 - Observability and structured logging
 - Resilience and fault-tolerance patterns
