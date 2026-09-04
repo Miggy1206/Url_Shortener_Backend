@@ -8,6 +8,10 @@ on:
     branches:
       - "**"
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -29,3 +33,33 @@ jobs:
 
       - name: Run tests
         run: dotnet test test/UrlShortenerBackendTests/UrlShortenerBackendTests.csproj --configuration Release --no-restore --verbosity normal
+
+      - name: Build Docker image
+        run: docker build -t urlshortener-api .
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: urlshortener-api
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag Docker image
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          docker tag urlshortener-api \
+            ghcr.io/${{ github.repository_owner }}/urlshortener-api:latest
+            
+      - name: Push Docker image
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          docker push \
+            ghcr.io/${{ github.repository_owner }}/urlshortener-api:latest
