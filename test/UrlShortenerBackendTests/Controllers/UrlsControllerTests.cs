@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using UrlShortenerBackend.Api.Controllers;
 using UrlShortenerBackend.Api.Data;
 using UrlShortenerBackend.Api.Models;
+using UrlShortenerBackend.Api.Services;
 
 namespace UrlShortenerBackend.Tests.Controllers;
 
@@ -20,7 +21,9 @@ public class UrlsControllerTests
 
     private static UrlsController CreateController(UrlShortenerDbContext context)
     {
-        var controller = new UrlsController(context);
+        var service = new UrlShortenerService(context);
+
+        var controller = new UrlsController(service);
 
         controller.ControllerContext = new ControllerContext
         {
