@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System.ComponentModel.DataAnnotations;
 using UrlShortenerBackend.Api.Data;
 using UrlShortenerBackend.Api.Models;
@@ -39,6 +40,24 @@ public class UrlsController : ControllerBase
             originalUrl = request.OriginalUrl
         });
     }
+
+    [HttpGet("{shortCode}")]
+    public async Task<IActionResult> RedirectToUrl(string shortCode)
+    {
+        var url = await _context.Urls.SingleOrDefaultAsync(x => x.ShortCode == shortCode);
+
+        if (url is null)
+        {
+            return NotFound();
+        }
+
+        url.ClickCount++;
+        
+        await _context.SaveChangesAsync();
+
+        return Redirect(url.OriginalUrl);
+    }
+
 }
 
 public record ShortenUrlRequest([Required][Url] string OriginalUrl);

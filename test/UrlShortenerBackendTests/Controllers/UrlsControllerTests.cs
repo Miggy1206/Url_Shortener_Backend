@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using UrlShortenerBackend.Api.Controllers;
 using UrlShortenerBackend.Api.Data;
+using UrlShortenerBackend.Api.Models;
 
 namespace UrlShortenerBackend.Tests.Controllers;
 
@@ -97,5 +98,67 @@ public class UrlsControllerTests
 
         Assert.NotNull(shortCode);
         Assert.Equal(6, shortCode.Length);
+    }
+
+    [Fact]
+    public async Task RedirectToUrl_WithExistingShortCode_ReturnsRedirect()
+    {
+        await using var context = CreateDbContext();
+
+        context.Urls.Add(new Url
+        {
+            OriginalUrl = "https://www.example.com",
+            ShortCode = "abc123",
+            CreatedAt = DateTime.UtcNow,
+            ClickCount = 0
+        });
+
+        await context.SaveChangesAsync();
+
+        var controller = CreateController(context);
+
+        var result = await controller.RedirectToUrl("abc123");
+
+        var redirectResult = Assert.IsType<RedirectResult>(result);
+
+        Assert.Equal("https://www.example.com", redirectResult.Url);
+    }
+
+    [Fact]
+    public async Task RedirectToUrl_WithNonExistingShortCode_ReturnsNotFound()
+    {
+        await using var context = CreateDbContext();
+
+        var controller = CreateController(context);
+
+        var result = await controller.RedirectToUrl("nonexistent");
+
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task RedirectToUrl_WithExistingShortCode_IncrementsClickCount()
+    {
+        await using var context = CreateDbContext();
+
+        context.Urls.Add(new Url
+        {
+            OriginalUrl = "https://www.example.com",
+            ShortCode = "abc123",
+            CreatedAt = DateTime.UtcNow,
+            ClickCount = 0
+        });
+
+        await context.SaveChangesAsync();
+
+        var controller = CreateController(context);
+
+        await controller.RedirectToUrl("abc123");
+
+        var url = await context.Urls.SingleAsync(x => x.ShortCode == "abc123");
+
+        Assert.Equal(1, url.ClickCount);
+
+
     }
 }

@@ -99,6 +99,17 @@ POST /api/urls
 
 Creates a shortened URL from a provided original URL.
 
+### Redirect to Url
+
+```http
+GET /api/urls/{shortCode}
+```
+
+Redirects user to the original url using the short URL created by the create short url endpoint.
+
+**Redirect Behaviour**
+The service uses HTTP 302 (Temporary Redirect) rather than 301 (Permanent Redirect). A 302 avoids clients and caches treating the destination as permanently associated with the short URL, allowing the destination to be changed in the future if required.
+
 ## Tech Stack
 
 | Technology            | Purpose                             |
