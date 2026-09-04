@@ -13,6 +13,7 @@ The focus is on understanding how distributed services are designed, tested, con
 - [API](#api)
 - [Tech Stack](#tech-stack)
 - [Testing](#testing)
+- [Docker](#docker)
 - [Project Status](#project-status)
 
 ## Objectives
@@ -41,11 +42,10 @@ The main objectives of this project are to:
 
 ```bash
 git clone <repository-url>
-
 cd Url_Shortener_Backend
 ```
 
-### Configure PostgreSQL and Redis
+### Configure Environment Variables
 
 Create a local `.env.local` file for Docker Compose:
 
@@ -55,7 +55,11 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=<your-password>
 ```
 
-Start the PostgreSQL and Redis containers:
+This file should remain local and must not be committed to source control.
+
+### Run the Infrastructure
+
+Start PostgreSQL and Redis using Docker Compose:
 
 ```bash
 docker compose --env-file .env.local up -d
@@ -63,9 +67,9 @@ docker compose --env-file .env.local up -d
 
 PostgreSQL is exposed locally on port `5433`, while Redis is available on port `6379`.
 
-### Configure the API
+### Configure the API for Local Development
 
-Configure the local database connection using .NET User Secrets:
+For running the API directly from the host, configure the PostgreSQL connection using .NET User Secrets:
 
 ```bash
 cd src/UrlShortenerBackend
@@ -75,7 +79,7 @@ dotnet user-secrets init
 dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5433;Database=urlshortener;Username=postgres;Password=<your-password>"
 ```
 
-The API connects to Redis using:
+The local API connects to Redis using:
 
 ```text
 localhost:6379
@@ -87,13 +91,13 @@ localhost:6379
 dotnet ef database update
 ```
 
-### Run the API
+### Run the API Locally
 
 ```bash
 dotnet run
 ```
 
-Swagger can then be used to interact with the API.
+Swagger/OpenAPI can then be used to interact with the API.
 
 ### Run Tests
 
@@ -129,13 +133,7 @@ Each shortened URL is assigned a unique `ShortCode`.
 
 Uniqueness is enforced at both the application and database levels.
 
-The application checks whether a generated code already exists before saving, while PostgreSQL enforces uniqueness through a unique index:
-
-```csharp
-modelBuilder.Entity<Url>()
-    .HasIndex(x => x.ShortCode)
-    .IsUnique();
-```
+The application checks whether a generated code already exists before saving, while PostgreSQL enforces uniqueness through a unique index.
 
 The database constraint provides the final guarantee against duplicate short codes, including concurrent requests or multiple application instances.
 
@@ -162,12 +160,44 @@ Redis is used as a cache for shortened URL destinations.
 The service follows a **cache-aside** approach:
 
 1. Check Redis for the short code.
-2. If the URL is cached, return the cached destination.
+2. If the URL is cached, use the cached destination.
 3. If the URL is not cached, retrieve it from PostgreSQL.
 4. Store the destination in Redis.
 5. Return the destination.
 
 PostgreSQL remains the source of truth for URL data and click counts.
+
+## Docker
+
+The application is containerised using a multi-stage Docker build.
+
+The build stage uses the .NET SDK image to restore, build, and publish the application.
+
+The runtime stage uses Microsoft's **.NET 10 Ubuntu Chiseled** ASP.NET runtime image, providing a minimal runtime environment with a reduced attack surface compared with a full Linux runtime image.
+
+The complete development stack can be started using Docker Compose:
+
+```bash
+docker compose --env-file .env.local up --build
+```
+
+This runs:
+
+- ASP.NET Core API
+- PostgreSQL
+- Redis
+
+The API is exposed on:
+
+```text
+http://localhost:8080
+```
+
+The health endpoint can be checked with:
+
+```bash
+curl http://localhost:8080/healthz
+```
 
 ## Tech Stack
 
@@ -182,6 +212,7 @@ PostgreSQL remains the source of truth for URL data and click counts.
 | Moq                   | Dependency mocking                  |
 | Testcontainers        | Database integration testing        |
 | Docker                | Containerisation                    |
+| Docker Compose        | Local service orchestration         |
 | Kubernetes            | Container orchestration _(planned)_ |
 | AWS                   | Cloud infrastructure _(planned)_    |
 
@@ -189,7 +220,7 @@ PostgreSQL remains the source of truth for URL data and click counts.
 
 The project uses multiple levels of automated testing:
 
-- **Unit tests** for controller and service behaviour.
+- **Unit tests** for service and controller behaviour.
 - **Integration tests** for API behaviour and database persistence.
 - **Testcontainers** to run PostgreSQL during integration tests.
 - **Moq** to isolate Redis dependencies in unit tests.
@@ -231,13 +262,16 @@ The initial API and database foundation have been implemented alongside a servic
 - Integration testing
 - Dockerised PostgreSQL
 - Dockerised Redis
+- Dockerised ASP.NET Core API
+- Multi-stage Docker build
+- Minimal/chiseled .NET runtime image
+- Docker Compose infrastructure
 - Redis cache-aside implementation
 - Health checks
 - Swagger/OpenAPI
 
 ### Planned
 
-- Dockerise the API
 - CI/CD pipeline
 - AWS deployment
 - Kubernetes deployment
