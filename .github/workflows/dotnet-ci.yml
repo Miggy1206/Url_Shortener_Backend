@@ -1,4 +1,4 @@
-name: .NET CI
+name: .NET CICD
 
 on:
   push:
@@ -9,8 +9,8 @@ on:
       - "**"
 
 permissions:
+  id-token: write
   contents: read
-  packages: write
 
 jobs:
   build-and-test:
@@ -45,26 +45,33 @@ jobs:
           ignore-unfixed: true
           exit-code: 1
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Configure AWS credentials
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-west-2
 
-      - name: Set image name
-        id: image
+      - name: Log in to Amazon ECR
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set ECR image URI
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        id: ecr
         run: |
-          IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/urlshortener-api"
-          echo "image_name=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          IMAGE_URI="${ACCOUNT_ID}.dkr.ecr.eu-west-2.amazonaws.com/urlshortener-api"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
       - name: Tag Docker image
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           docker tag urlshortener-api \
-            ${{ steps.image.outputs.image_name }}:latest
+            ${{ steps.ecr.outputs.image_uri }}:sha-${{ github.sha }}
 
-      - name: Push Docker image
+      - name: Push Docker image to ECR
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           docker push \
-            ${{ steps.image.outputs.image_name }}:latest
+            ${{ steps.ecr.outputs.image_uri }}:sha-${{ github.sha }}
