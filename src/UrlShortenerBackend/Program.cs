@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using UrlShortenerBackend.Api.Data;
+using UrlShortenerBackend.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,6 +13,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddControllers();
 builder.Services.AddHealthChecks();
+builder.Services.AddScoped<IUrlShortenerService, UrlShortenerService>();
 
 builder.Services.AddDbContext<UrlShortenerDbContext>(options =>
     options.UseNpgsql(
