@@ -5,11 +5,33 @@ using UrlShortenerBackend.Api.Controllers;
 using UrlShortenerBackend.Api.Data;
 using UrlShortenerBackend.Api.Models;
 using UrlShortenerBackend.Api.Services;
+using Moq;
+using StackExchange.Redis;
 
 namespace UrlShortenerBackend.Tests.Controllers;
 
 public class UrlsControllerTests
 {
+    private static IConnectionMultiplexer CreateRedisMock()
+    {
+        var redisMock = new Mock<IConnectionMultiplexer>();
+        var databaseMock = new Mock<IDatabase>();
+
+        redisMock
+            .Setup(x => x.GetDatabase(
+                It.IsAny<int>(),
+                It.IsAny<object?>()))
+            .Returns(databaseMock.Object);
+
+        databaseMock
+            .Setup(x => x.StringGetAsync(
+                It.IsAny<RedisKey>(),
+                It.IsAny<CommandFlags>()))
+            .ReturnsAsync(RedisValue.Null);
+
+        return redisMock.Object;
+    }
+
     private static UrlShortenerDbContext CreateDbContext()
     {
         var options = new DbContextOptionsBuilder<UrlShortenerDbContext>()
@@ -21,7 +43,7 @@ public class UrlsControllerTests
 
     private static UrlsController CreateController(UrlShortenerDbContext context)
     {
-        var service = new UrlShortenerService(context);
+        var service = new UrlShortenerService(context, CreateRedisMock());
 
         var controller = new UrlsController(service);
 
