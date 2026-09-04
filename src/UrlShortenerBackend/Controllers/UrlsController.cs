@@ -35,15 +35,15 @@ public class UrlsController : ControllerBase
     [HttpGet("/{shortCode}")]
     public async Task<IActionResult> RedirectToUrl(string shortCode)
     {
-        var url = await _urlShortenerService
+        var originalUrl = await _urlShortenerService
             .RedirectUrlAsync(shortCode);
 
-        if (url is null)
+        if (originalUrl is null)
         {
             return NotFound();
         }
 
-        return Redirect(url.OriginalUrl);
+        return Redirect(originalUrl);
     }
 
 }

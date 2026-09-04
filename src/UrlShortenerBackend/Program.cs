@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using UrlShortenerBackend.Api.Data;
 using UrlShortenerBackend.Api.Services;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,6 +19,10 @@ builder.Services.AddScoped<IUrlShortenerService, UrlShortenerService>();
 builder.Services.AddDbContext<UrlShortenerDbContext>(options =>
     options.UseNpgsql(
         builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.AddSingleton<IConnectionMultiplexer>(
+    ConnectionMultiplexer.Connect(
+        builder.Configuration["Redis:ConnectionString"]!));
 
 var app = builder.Build();
 
