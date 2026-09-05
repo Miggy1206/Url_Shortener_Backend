@@ -15,6 +15,7 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddControllers();
 builder.Services.AddHealthChecks();
 builder.Services.AddScoped<IUrlShortenerService, UrlShortenerService>();
+builder.Services.AddProblemDetails();
 
 builder.Services.AddDbContext<UrlShortenerDbContext>(options =>
     options.UseNpgsql(
@@ -27,6 +28,8 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(
 var app = builder.Build();
 
 app.MapHealthChecks("/healthz");
+
+app.UseExceptionHandler();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

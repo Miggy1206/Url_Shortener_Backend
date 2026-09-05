@@ -69,8 +69,8 @@ public class UrlsControllerTests
         var result = await controller.ShortenUrl(request);
 
         // Assert
-        var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.NotNull(okResult.Value);
+        var createdResult = Assert.IsType<CreatedResult>(result);
+        Assert.NotNull(createdResult.Value);
 
         var savedUrl = await context.Urls.SingleAsync();
 
@@ -81,7 +81,7 @@ public class UrlsControllerTests
     }
 
     [Fact]
-    public async Task ShortenUrl_WithValidUrl_ReturnsOk()
+    public async Task ShortenUrl_WithValidUrl_ReturnsCreated()
     {
         // Arrange
         await using var context = CreateDbContext();
@@ -94,7 +94,7 @@ public class UrlsControllerTests
         var result = await controller.ShortenUrl(request);
 
         // Assert
-        Assert.IsType<OkObjectResult>(result);
+        Assert.IsType<CreatedResult>(result);
     }
 
     [Fact]
@@ -111,9 +111,10 @@ public class UrlsControllerTests
         var result = await controller.ShortenUrl(request);
 
         // Assert
-        var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.NotNull(okResult.Value);
-        var value = okResult.Value;
+        var createdResult = Assert.IsType<CreatedResult>(result);
+        Assert.NotNull(createdResult.Value);
+
+        var value = createdResult.Value;
 
         var shortCode = value
             .GetType()
@@ -128,25 +129,32 @@ public class UrlsControllerTests
     [Fact]
     public async Task ShortenUrl_MultipleUrls_GeneratesUniqueShortCodes()
     {
+        // Arrange
         await using var context = CreateDbContext();
         var controller = CreateController(context);
 
+        // Act
         for (var i = 0; i < 100; i++)
         {
-            var request = new ShortenUrlRequest($"https://example.com/{i}");
+            var request = new ShortenUrlRequest(
+                $"https://example.com/{i}");
 
             await controller.ShortenUrl(request);
         }
 
+        // Assert
         var urls = await context.Urls.ToListAsync();
 
         Assert.Equal(100, urls.Count);
-        Assert.Equal(100, urls.Select(x => x.ShortCode).Distinct().Count());
+        Assert.Equal(
+            100,
+            urls.Select(x => x.ShortCode).Distinct().Count());
     }
 
     [Fact]
     public async Task RedirectToUrl_WithExistingShortCode_ReturnsRedirect()
     {
+        // Arrange
         await using var context = CreateDbContext();
 
         context.Urls.Add(new Url
@@ -161,28 +169,36 @@ public class UrlsControllerTests
 
         var controller = CreateController(context);
 
+        // Act
         var result = await controller.RedirectToUrl("abc123");
 
+        // Assert
         var redirectResult = Assert.IsType<RedirectResult>(result);
 
-        Assert.Equal("https://www.example.com", redirectResult.Url);
+        Assert.Equal(
+            "https://www.example.com",
+            redirectResult.Url);
     }
 
     [Fact]
     public async Task RedirectToUrl_WithNonExistingShortCode_ReturnsNotFound()
     {
+        // Arrange
         await using var context = CreateDbContext();
 
         var controller = CreateController(context);
 
+        // Act
         var result = await controller.RedirectToUrl("nonexistent");
 
+        // Assert
         Assert.IsType<NotFoundResult>(result);
     }
 
     [Fact]
     public async Task RedirectToUrl_WithExistingShortCode_IncrementsClickCount()
     {
+        // Arrange
         await using var context = CreateDbContext();
 
         context.Urls.Add(new Url
@@ -197,12 +213,13 @@ public class UrlsControllerTests
 
         var controller = CreateController(context);
 
+        // Act
         await controller.RedirectToUrl("abc123");
 
-        var url = await context.Urls.SingleAsync(x => x.ShortCode == "abc123");
+        // Assert
+        var url = await context.Urls
+            .SingleAsync(x => x.ShortCode == "abc123");
 
         Assert.Equal(1, url.ClickCount);
-
-
     }
 }
