@@ -43,6 +43,7 @@ The main objectives of this project are to:
 
 ```bash
 git clone <repository-url>
+
 cd Url_Shortener_Backend
 ```
 
@@ -207,6 +208,25 @@ The service follows a **cache-aside** approach:
 
 PostgreSQL remains the source of truth for URL data and click counts.
 
+### Rate Limiting
+
+The API uses endpoint-specific rate limiting to protect against excessive requests.
+
+The current limits are:
+
+| Endpoint           |                             Limit |
+| ------------------ | --------------------------------: |
+| `POST /api/urls`   |  5 requests per minute per client |
+| `GET /{shortCode}` | 60 requests per minute per client |
+
+Requests exceeding the configured limit return:
+
+```text
+429 Too Many Requests
+```
+
+Rate limiting is implemented using ASP.NET Core's built-in rate-limiting middleware.
+
 ## Docker
 
 The application is containerised using a multi-stage Docker build.
@@ -259,23 +279,23 @@ AWS application deployment is not currently part of the CI/CD pipeline.
 
 ## Tech Stack
 
-| Technology            | Purpose                                         |
-| --------------------- | ----------------------------------------------- |
-| C# / .NET 10          | Backend development                             |
-| ASP.NET Core          | REST API                                        |
-| Entity Framework Core | Data access                                     |
-| PostgreSQL            | Primary database                                |
-| Redis                 | Distributed caching                             |
-| xUnit                 | Unit and integration testing                    |
-| Moq                   | Dependency mocking                              |
-| Testcontainers        | Database integration testing                    |
-| Docker                | Containerisation                                |
-| Docker Compose        | Local service orchestration                     |
-| Trivy                 | Container vulnerability scanning                |
-| GitHub Actions        | CI/CD automation                                |
-| AWS ECR               | Container image registry                        |
-| Kubernetes            | Container orchestration _(planned)_             |
-| AWS                   | Cloud infrastructure and deployment _(planned)_ |
+| Technology            | Purpose                             |
+| --------------------- | ----------------------------------- |
+| C# / .NET 10          | Backend development                 |
+| ASP.NET Core          | REST API                            |
+| Entity Framework Core | Data access                         |
+| PostgreSQL            | Primary database                    |
+| Redis                 | Distributed caching                 |
+| xUnit                 | Unit and integration testing        |
+| Moq                   | Dependency mocking                  |
+| Testcontainers        | Database integration testing        |
+| Docker                | Containerisation                    |
+| Docker Compose        | Local service orchestration         |
+| Trivy                 | Container vulnerability scanning    |
+| GitHub Actions        | CI/CD automation                    |
+| AWS ECR               | Container image registry            |
+| Kubernetes            | Container orchestration _(planned)_ |
+| AWS                   | Cloud infrastructure and deployment |
 
 ## Testing
 
@@ -291,6 +311,7 @@ The test suite verifies functionality including:
 - URL creation
 - Valid URL validation
 - Missing URL validation
+- Empty URL validation
 - Malformed URL validation
 - HTTP/HTTPS scheme validation
 - Unsupported URL scheme rejection
@@ -304,6 +325,9 @@ The test suite verifies functionality including:
 - Non-existent short codes
 - Redis cache behaviour
 - PostgreSQL persistence
+- Rate limiting for URL creation
+- Rate limiting for redirects
+- `429 Too Many Requests` responses
 - End-to-end API behaviour
 
 Run the complete test suite with:
@@ -316,7 +340,7 @@ dotnet test
 
 🚧 **In development**
 
-The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, and AWS container registry integration.
+The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, and AWS container registry integration.
 
 ### Completed
 
@@ -335,6 +359,10 @@ The initial API and database foundation have been implemented alongside a servic
 - `201 Created` response for successful URL creation
 - `302 Found` redirects
 - `404 Not Found` handling for unknown short codes
+- Endpoint-specific rate limiting
+- Rate limiting for URL creation and redirects
+- `429 Too Many Requests` responses
+- Rate-limiting integration tests
 - Dockerised PostgreSQL
 - Dockerised Redis
 - Dockerised ASP.NET Core API
@@ -354,7 +382,6 @@ The initial API and database foundation have been implemented alongside a servic
 
 ### Planned
 
-- Rate limiting
 - Redis failure resilience and graceful fallback behaviour
 - Structured logging and observability
 - AWS application deployment
