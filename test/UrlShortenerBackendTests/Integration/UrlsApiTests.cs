@@ -36,7 +36,7 @@ public class UrlsApiTests : IClassFixture<PostgresFixture>
             "/api/urls",
             request);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class UrlsApiTests : IClassFixture<PostgresFixture>
             "/api/urls",
             request);
 
-        Assert.Equal(HttpStatusCode.OK, createResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
 
         var createResult =
             await createResponse.Content.ReadFromJsonAsync<JsonElement>();
@@ -86,5 +86,80 @@ public class UrlsApiTests : IClassFixture<PostgresFixture>
             .SingleAsync(x => x.ShortCode == shortCode);
 
         Assert.Equal(1, savedUrl.ClickCount);
+    }
+
+    [Fact]
+    public async Task ShortenUrl_WithMissingUrl_ReturnsBadRequest()
+    {
+        var request = new
+        {
+            OriginalUrl = ""
+        };
+
+        var response = await _client.PostAsJsonAsync("/api/urls", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ShortenUrl_WithInvalidUrl_ReturnsBadRequest()
+    {
+        var request = new
+        {
+            OriginalUrl = "not-a-url"
+        };
+
+        var response = await _client.PostAsJsonAsync("/api/urls", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ShortenUrl_WithUnsupportedScheme_ReturnsBadRequest()
+    {
+        var request = new
+        {
+            originalUrl = "ftp://example.com/file.txt"
+        };
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/urls",
+            request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ShortenUrl_WithJavascriptUrl_ReturnsBadRequest()
+    {
+        var request = new
+        {
+            originalUrl = "javascript:alert(1)"
+        };
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/urls",
+            request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ShortenUrl_WithUrlExceedingMaxLength_ReturnsBadRequest()
+    {
+        var longUrl = $"https://example.com/{new string('a', 2048)}";
+
+        var request = new
+        {
+            originalUrl = longUrl
+        };
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/urls",
+            request);
+
+        Assert.Equal(
+            HttpStatusCode.BadRequest,
+            response.StatusCode);
     }
 }

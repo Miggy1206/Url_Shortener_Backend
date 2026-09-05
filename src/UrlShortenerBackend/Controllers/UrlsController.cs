@@ -24,12 +24,14 @@ public class UrlsController : ControllerBase
         var url = await _urlShortenerService
             .CreateShortUrlAsync(request.OriginalUrl);
 
-        return Ok(new
-        {
-            shortCode = url.ShortCode,
-            shortUrl = $"{Request.Scheme}://{Request.Host}/{url.ShortCode}",
-            originalUrl = url.OriginalUrl
-        });
+        return Created(
+            $"/{url.ShortCode}",
+            new
+            {
+                shortCode = url.ShortCode,
+                shortUrl = $"{Request.Scheme}://{Request.Host}/{url.ShortCode}",
+                originalUrl = url.OriginalUrl
+            });
     }
 
     [HttpGet("/{shortCode}")]
@@ -48,4 +50,4 @@ public class UrlsController : ControllerBase
 
 }
 
-public record ShortenUrlRequest([Required][Url] string OriginalUrl);
+public record ShortenUrlRequest([Required][HttpUrl] string OriginalUrl);

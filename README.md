@@ -128,6 +128,33 @@ Example request:
 }
 ```
 
+A successful request returns:
+
+```text
+201 Created
+```
+
+The response contains the generated short code, short URL, and original URL.
+
+### URL Validation
+
+The API validates URLs before they reach the service layer.
+
+The following are rejected with:
+
+```text
+400 Bad Request
+```
+
+- Missing URLs
+- Empty URLs
+- Malformed URLs
+- URLs exceeding 2048 characters
+- Unsupported schemes such as `ftp`
+- `javascript:` URLs
+
+Only absolute `http` and `https` URLs are accepted.
+
 ### Short Code Uniqueness
 
 Each shortened URL is assigned a unique `ShortCode`.
@@ -147,6 +174,18 @@ GET /{shortCode}
 ```
 
 Redirects the user to the original URL associated with the short code.
+
+A successful redirect returns:
+
+```text
+302 Found
+```
+
+A short code that does not exist returns:
+
+```text
+404 Not Found
+```
 
 ### Redirect Behaviour
 
@@ -216,25 +255,27 @@ AWS credentials are not stored in the repository. GitHub Actions assumes a dedic
 
 Docker images pushed to ECR use the Git commit SHA as their tag, providing immutable and traceable image versions.
 
+AWS application deployment is not currently part of the CI/CD pipeline.
+
 ## Tech Stack
 
-| Technology            | Purpose                             |
-| --------------------- | ----------------------------------- |
-| C# / .NET 10          | Backend development                 |
-| ASP.NET Core          | REST API                            |
-| Entity Framework Core | Data access                         |
-| PostgreSQL            | Primary database                    |
-| Redis                 | Distributed caching                 |
-| xUnit                 | Unit and integration testing        |
-| Moq                   | Dependency mocking                  |
-| Testcontainers        | Database integration testing        |
-| Docker                | Containerisation                    |
-| Docker Compose        | Local service orchestration         |
-| Trivy                 | Container vulnerability scanning    |
-| GitHub Actions        | CI/CD automation                    |
-| AWS ECR               | Container image registry            |
-| Kubernetes            | Container orchestration _(planned)_ |
-| AWS                   | Cloud infrastructure                |
+| Technology            | Purpose                                         |
+| --------------------- | ----------------------------------------------- |
+| C# / .NET 10          | Backend development                             |
+| ASP.NET Core          | REST API                                        |
+| Entity Framework Core | Data access                                     |
+| PostgreSQL            | Primary database                                |
+| Redis                 | Distributed caching                             |
+| xUnit                 | Unit and integration testing                    |
+| Moq                   | Dependency mocking                              |
+| Testcontainers        | Database integration testing                    |
+| Docker                | Containerisation                                |
+| Docker Compose        | Local service orchestration                     |
+| Trivy                 | Container vulnerability scanning                |
+| GitHub Actions        | CI/CD automation                                |
+| AWS ECR               | Container image registry                        |
+| Kubernetes            | Container orchestration _(planned)_             |
+| AWS                   | Cloud infrastructure and deployment _(planned)_ |
 
 ## Testing
 
@@ -248,6 +289,13 @@ The project uses multiple levels of automated testing:
 The test suite verifies functionality including:
 
 - URL creation
+- Valid URL validation
+- Missing URL validation
+- Malformed URL validation
+- HTTP/HTTPS scheme validation
+- Unsupported URL scheme rejection
+- `javascript:` URL rejection
+- Maximum URL length validation
 - Short-code generation
 - Short-code uniqueness
 - URL redirection
@@ -280,6 +328,13 @@ The initial API and database foundation have been implemented alongside a servic
 - Service layer
 - Unit testing
 - Integration testing
+- Request validation
+- HTTP/HTTPS URL scheme validation
+- Maximum URL length validation
+- Consistent `400 Bad Request` validation responses
+- `201 Created` response for successful URL creation
+- `302 Found` redirects
+- `404 Not Found` handling for unknown short codes
 - Dockerised PostgreSQL
 - Dockerised Redis
 - Dockerised ASP.NET Core API
@@ -299,13 +354,18 @@ The initial API and database foundation have been implemented alongside a servic
 
 ### Planned
 
+- Rate limiting
+- Redis failure resilience and graceful fallback behaviour
+- Structured logging and observability
 - AWS application deployment
+- AWS networking architecture
+- Managed PostgreSQL deployment
+- Managed Redis deployment
 - Kubernetes deployment
-- Observability and structured logging
-- Resilience and fault-tolerance patterns
 - Load testing
-- Performance optimisation
+- Performance benchmarking and optimisation
 - Distributed system scalability
+- Resilience and fault-tolerance patterns
 - Production-ready security
 
 The project will progressively evolve towards a **distributed, scalable, observable, and production-oriented backend system**.
