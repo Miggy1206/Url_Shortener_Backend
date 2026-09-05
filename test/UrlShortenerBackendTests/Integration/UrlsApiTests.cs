@@ -162,4 +162,80 @@ public class UrlsApiTests : IClassFixture<PostgresFixture>
             HttpStatusCode.BadRequest,
             response.StatusCode);
     }
+
+    [Fact]
+    public async Task CreateShortUrl_WhenRateLimitExceeded_ReturnsTooManyRequests()
+    {
+        for (var i = 0; i < 5; i++)
+        {
+            var request = new
+            {
+                originalUrl = $"https://example.com/rate-limit/{Guid.NewGuid()}"
+            };
+
+            var response = await _client.PostAsJsonAsync(
+                "/api/urls",
+                request);
+
+            Assert.Equal(
+                HttpStatusCode.Created,
+                response.StatusCode);
+        }
+
+        var limitedRequest = new
+        {
+            originalUrl = $"https://example.com/rate-limit/{Guid.NewGuid()}"
+        };
+
+        var limitedResponse = await _client.PostAsJsonAsync(
+            "/api/urls",
+            limitedRequest);
+
+        Assert.Equal(
+            HttpStatusCode.TooManyRequests,
+            limitedResponse.StatusCode);
+    }
+    
+    [Fact]
+    public async Task RedirectToUrl_WhenRateLimitExceeded_ReturnsTooManyRequests()
+    {
+        var request = new
+        {
+            originalUrl = $"https://example.com/rate-limit/{Guid.NewGuid()}"
+        };
+
+        var createResponse = await _client.PostAsJsonAsync(
+            "/api/urls",
+            request);
+
+        Assert.Equal(
+            HttpStatusCode.Created,
+            createResponse.StatusCode);
+
+        var createResult =
+            await createResponse.Content.ReadFromJsonAsync<JsonElement>();
+
+        var shortCode = createResult
+            .GetProperty("shortCode")
+            .GetString();
+
+        Assert.NotNull(shortCode);
+
+        for (var i = 0; i < 60; i++)
+        {
+            var response = await _client.GetAsync(
+                $"/{shortCode}");
+
+            Assert.Equal(
+                HttpStatusCode.Redirect,
+                response.StatusCode);
+        }
+
+        var limitedResponse = await _client.GetAsync(
+            $"/{shortCode}");
+
+        Assert.Equal(
+            HttpStatusCode.TooManyRequests,
+            limitedResponse.StatusCode);
+    }
 }

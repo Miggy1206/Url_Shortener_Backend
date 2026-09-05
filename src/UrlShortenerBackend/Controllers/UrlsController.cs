@@ -1,9 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using System.ComponentModel.DataAnnotations;
-using UrlShortenerBackend.Api.Data;
 using UrlShortenerBackend.Api.Models;
 using UrlShortenerBackend.Api.Services;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace UrlShortenerBackend.Api.Controllers;
 
@@ -18,6 +17,7 @@ public class UrlsController : ControllerBase
         _urlShortenerService = urlShortenerService;
     }
 
+    [EnableRateLimiting("url-creation")]
     [HttpPost]
     public async Task<IActionResult> ShortenUrl(ShortenUrlRequest request)
     {
@@ -34,6 +34,7 @@ public class UrlsController : ControllerBase
             });
     }
 
+    [EnableRateLimiting("url-redirect")]
     [HttpGet("/{shortCode}")]
     public async Task<IActionResult> RedirectToUrl(string shortCode)
     {
