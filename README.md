@@ -149,6 +149,7 @@ The following are rejected with:
 
 - Missing URLs
 - Empty URLs
+- Whitespace-only URLs
 - Malformed URLs
 - URLs exceeding 2048 characters
 - Unsupported schemes such as `ftp`
@@ -207,6 +208,16 @@ The service follows a **cache-aside** approach:
 5. Return the destination.
 
 PostgreSQL remains the source of truth for URL data and click counts.
+
+### Redis Resilience
+
+Redis is treated as an optimisation rather than a required dependency for serving redirects.
+
+If a Redis read fails, the service falls back to PostgreSQL.
+
+If a Redis write fails after successfully retrieving the URL from PostgreSQL, the request still succeeds and the URL is returned without caching the result.
+
+This prevents a Redis outage from unnecessarily making the URL redirection functionality unavailable.
 
 ### Rate Limiting
 
@@ -312,6 +323,7 @@ The test suite verifies functionality including:
 - Valid URL validation
 - Missing URL validation
 - Empty URL validation
+- Whitespace-only URL validation
 - Malformed URL validation
 - HTTP/HTTPS scheme validation
 - Unsupported URL scheme rejection
@@ -324,6 +336,8 @@ The test suite verifies functionality including:
 - Click-count tracking
 - Non-existent short codes
 - Redis cache behaviour
+- Redis read failure fallback to PostgreSQL
+- Redis write failure resilience
 - PostgreSQL persistence
 - Rate limiting for URL creation
 - Rate limiting for redirects
@@ -356,6 +370,7 @@ The initial API and database foundation have been implemented alongside a servic
 - HTTP/HTTPS URL scheme validation
 - Maximum URL length validation
 - Consistent `400 Bad Request` validation responses
+- Global ASP.NET Core `ProblemDetails` exception handling
 - `201 Created` response for successful URL creation
 - `302 Found` redirects
 - `404 Not Found` handling for unknown short codes
@@ -363,13 +378,15 @@ The initial API and database foundation have been implemented alongside a servic
 - Rate limiting for URL creation and redirects
 - `429 Too Many Requests` responses
 - Rate-limiting integration tests
+- Redis cache-aside implementation
+- Redis failure resilience and PostgreSQL fallback
+- Redis failure resilience tests
 - Dockerised PostgreSQL
 - Dockerised Redis
 - Dockerised ASP.NET Core API
 - Multi-stage Docker build
 - Minimal/chiseled .NET runtime image
 - Docker Compose infrastructure
-- Redis cache-aside implementation
 - Health checks
 - Swagger/OpenAPI
 - GitHub Actions CI pipeline
@@ -382,17 +399,18 @@ The initial API and database foundation have been implemented alongside a servic
 
 ### Planned
 
-- Redis failure resilience and graceful fallback behaviour
 - Structured logging and observability
+- Concurrency testing
+- Click-count concurrency improvements
+- Load testing
+- Performance benchmarking and optimisation
+- Security hardening
 - AWS application deployment
 - AWS networking architecture
 - Managed PostgreSQL deployment
 - Managed Redis deployment
 - Kubernetes deployment
-- Load testing
-- Performance benchmarking and optimisation
 - Distributed system scalability
 - Resilience and fault-tolerance patterns
-- Production-ready security
 
 The project will progressively evolve towards a **distributed, scalable, observable, and production-oriented backend system**.

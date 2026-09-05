@@ -7,6 +7,8 @@ using UrlShortenerBackend.Api.Models;
 using UrlShortenerBackend.Api.Services;
 using Moq;
 using StackExchange.Redis;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace UrlShortenerBackend.Tests.Controllers;
 
@@ -41,9 +43,12 @@ public class UrlsControllerTests
         return new UrlShortenerDbContext(options);
     }
 
-    private static UrlsController CreateController(UrlShortenerDbContext context)
+   private static UrlsController CreateController(UrlShortenerDbContext context)
     {
-        var service = new UrlShortenerService(context, CreateRedisMock());
+        var service = new UrlShortenerService(
+            context,
+            CreateRedisMock(),
+            NullLogger<UrlShortenerService>.Instance);
 
         var controller = new UrlsController(service);
 

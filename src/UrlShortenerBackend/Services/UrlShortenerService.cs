@@ -8,7 +8,8 @@ namespace UrlShortenerBackend.Api.Services;
 
 public class UrlShortenerService(
     UrlShortenerDbContext context,
-    IConnectionMultiplexer redis) : IUrlShortenerService
+    IConnectionMultiplexer redis,
+    ILogger<UrlShortenerService> logger) : IUrlShortenerService
 {
     private readonly IDatabase _cache = redis.GetDatabase();
 
@@ -55,13 +56,23 @@ public class UrlShortenerService(
     {
         var cacheKey = $"url:{shortCode}";
 
-        var cachedOriginalUrl = await _cache.StringGetAsync(cacheKey);
-
-        if (cachedOriginalUrl.HasValue)
+        try
         {
-            await IncrementClickCountAsync(shortCode);
+            var cachedOriginalUrl = await _cache.StringGetAsync(cacheKey);
 
-            return cachedOriginalUrl!;
+            if (cachedOriginalUrl.HasValue)
+            {
+                await IncrementClickCountAsync(shortCode);
+
+                return cachedOriginalUrl!;
+            }
+        }
+        catch (RedisException ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Redis read failed for short code {ShortCode}. Falling back to PostgreSQL.",
+                shortCode);
         }
 
         var url = await context.Urls
@@ -76,9 +87,19 @@ public class UrlShortenerService(
 
         await context.SaveChangesAsync();
 
-        await _cache.StringSetAsync(
-            cacheKey,
-            url.OriginalUrl);
+        try
+        {
+            await _cache.StringSetAsync(
+                cacheKey,
+                url.OriginalUrl);
+        }
+        catch (RedisException ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Redis write failed for short code {ShortCode}. Continuing without cache.",
+                shortCode);
+        }
 
         return url.OriginalUrl;
     }
