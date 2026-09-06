@@ -1,55 +1,17 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+using Moq;
 using UrlShortenerBackend.Api.Controllers;
-using UrlShortenerBackend.Api.Data;
 using UrlShortenerBackend.Api.Models;
 using UrlShortenerBackend.Api.Services;
-using Moq;
-using StackExchange.Redis;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace UrlShortenerBackend.Tests.Controllers;
 
 public class UrlsControllerTests
 {
-    private static IConnectionMultiplexer CreateRedisMock()
+    private static UrlsController CreateController(
+        IUrlShortenerService service)
     {
-        var redisMock = new Mock<IConnectionMultiplexer>();
-        var databaseMock = new Mock<IDatabase>();
-
-        redisMock
-            .Setup(x => x.GetDatabase(
-                It.IsAny<int>(),
-                It.IsAny<object?>()))
-            .Returns(databaseMock.Object);
-
-        databaseMock
-            .Setup(x => x.StringGetAsync(
-                It.IsAny<RedisKey>(),
-                It.IsAny<CommandFlags>()))
-            .ReturnsAsync(RedisValue.Null);
-
-        return redisMock.Object;
-    }
-
-    private static UrlShortenerDbContext CreateDbContext()
-    {
-        var options = new DbContextOptionsBuilder<UrlShortenerDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options;
-
-        return new UrlShortenerDbContext(options);
-    }
-
-   private static UrlsController CreateController(UrlShortenerDbContext context)
-    {
-        var service = new UrlShortenerService(
-            context,
-            CreateRedisMock(),
-            NullLogger<UrlShortenerService>.Instance);
-
         var controller = new UrlsController(service);
 
         controller.ControllerContext = new ControllerContext
@@ -61,11 +23,24 @@ public class UrlsControllerTests
     }
 
     [Fact]
-    public async Task ShortenUrl_WithValidUrl_CreatesUrl()
+    public async Task ShortenUrl_WithValidUrl_ReturnsCreated()
     {
         // Arrange
-        await using var context = CreateDbContext();
-        var controller = CreateController(context);
+        var serviceMock = new Mock<IUrlShortenerService>();
+
+        serviceMock
+            .Setup(x => x.CreateShortUrlAsync(
+                "https://www.example.com"))
+            .ReturnsAsync(new Url
+            {
+                OriginalUrl = "https://www.example.com",
+                ShortCode = "abc123",
+                CreatedAt = DateTime.UtcNow,
+                ClickCount = 0
+            });
+
+        var controller = CreateController(
+            serviceMock.Object);
 
         var request = new ShortenUrlRequest(
             "https://www.example.com");
@@ -75,39 +50,32 @@ public class UrlsControllerTests
 
         // Assert
         var createdResult = Assert.IsType<CreatedResult>(result);
+
         Assert.NotNull(createdResult.Value);
-
-        var savedUrl = await context.Urls.SingleAsync();
-
-        Assert.Equal("https://www.example.com", savedUrl.OriginalUrl);
-        Assert.Equal(6, savedUrl.ShortCode.Length);
-        Assert.Equal(0, savedUrl.ClickCount);
-        Assert.NotEqual(default, savedUrl.CreatedAt);
-    }
-
-    [Fact]
-    public async Task ShortenUrl_WithValidUrl_ReturnsCreated()
-    {
-        // Arrange
-        await using var context = CreateDbContext();
-        var controller = CreateController(context);
-
-        var request = new ShortenUrlRequest(
-            "https://www.example.com");
-
-        // Act
-        var result = await controller.ShortenUrl(request);
-
-        // Assert
-        Assert.IsType<CreatedResult>(result);
+        Assert.Equal(
+            "/abc123",
+            createdResult.Location);
     }
 
     [Fact]
     public async Task ShortenUrl_WithValidUrl_ReturnsShortCode()
     {
         // Arrange
-        await using var context = CreateDbContext();
-        var controller = CreateController(context);
+        var serviceMock = new Mock<IUrlShortenerService>();
+
+        serviceMock
+            .Setup(x => x.CreateShortUrlAsync(
+                "https://www.example.com"))
+            .ReturnsAsync(new Url
+            {
+                OriginalUrl = "https://www.example.com",
+                ShortCode = "abc123",
+                CreatedAt = DateTime.UtcNow,
+                ClickCount = 0
+            });
+
+        var controller = CreateController(
+            serviceMock.Object);
 
         var request = new ShortenUrlRequest(
             "https://www.example.com");
@@ -117,62 +85,65 @@ public class UrlsControllerTests
 
         // Assert
         var createdResult = Assert.IsType<CreatedResult>(result);
+
         Assert.NotNull(createdResult.Value);
 
-        var value = createdResult.Value;
-
-        var shortCode = value
+        var shortCode = createdResult.Value
             .GetType()
             .GetProperty("shortCode")?
-            .GetValue(value)?
+            .GetValue(createdResult.Value)?
             .ToString();
 
-        Assert.NotNull(shortCode);
-        Assert.Equal(6, shortCode.Length);
+        Assert.Equal(
+            "abc123",
+            shortCode);
     }
 
     [Fact]
-    public async Task ShortenUrl_MultipleUrls_GeneratesUniqueShortCodes()
+    public async Task ShortenUrl_WithValidUrl_CallsService()
     {
         // Arrange
-        await using var context = CreateDbContext();
-        var controller = CreateController(context);
+        var serviceMock = new Mock<IUrlShortenerService>();
+
+        serviceMock
+            .Setup(x => x.CreateShortUrlAsync(
+                "https://www.example.com"))
+            .ReturnsAsync(new Url
+            {
+                OriginalUrl = "https://www.example.com",
+                ShortCode = "abc123",
+                CreatedAt = DateTime.UtcNow,
+                ClickCount = 0
+            });
+
+        var controller = CreateController(
+            serviceMock.Object);
+
+        var request = new ShortenUrlRequest(
+            "https://www.example.com");
 
         // Act
-        for (var i = 0; i < 100; i++)
-        {
-            var request = new ShortenUrlRequest(
-                $"https://example.com/{i}");
-
-            await controller.ShortenUrl(request);
-        }
+        await controller.ShortenUrl(request);
 
         // Assert
-        var urls = await context.Urls.ToListAsync();
-
-        Assert.Equal(100, urls.Count);
-        Assert.Equal(
-            100,
-            urls.Select(x => x.ShortCode).Distinct().Count());
+        serviceMock.Verify(
+            x => x.CreateShortUrlAsync(
+                "https://www.example.com"),
+            Times.Once);
     }
 
     [Fact]
     public async Task RedirectToUrl_WithExistingShortCode_ReturnsRedirect()
     {
         // Arrange
-        await using var context = CreateDbContext();
+        var serviceMock = new Mock<IUrlShortenerService>();
 
-        context.Urls.Add(new Url
-        {
-            OriginalUrl = "https://www.example.com",
-            ShortCode = "abc123",
-            CreatedAt = DateTime.UtcNow,
-            ClickCount = 0
-        });
+        serviceMock
+            .Setup(x => x.RedirectUrlAsync("abc123"))
+            .ReturnsAsync("https://www.example.com");
 
-        await context.SaveChangesAsync();
-
-        var controller = CreateController(context);
+        var controller = CreateController(
+            serviceMock.Object);
 
         // Act
         var result = await controller.RedirectToUrl("abc123");
@@ -189,42 +160,42 @@ public class UrlsControllerTests
     public async Task RedirectToUrl_WithNonExistingShortCode_ReturnsNotFound()
     {
         // Arrange
-        await using var context = CreateDbContext();
+        var serviceMock = new Mock<IUrlShortenerService>();
 
-        var controller = CreateController(context);
+        serviceMock
+            .Setup(x => x.RedirectUrlAsync("nonexistent"))
+            .ReturnsAsync((string?)null);
+
+        var controller = CreateController(
+            serviceMock.Object);
 
         // Act
-        var result = await controller.RedirectToUrl("nonexistent");
+        var result = await controller.RedirectToUrl(
+            "nonexistent");
 
         // Assert
         Assert.IsType<NotFoundResult>(result);
     }
 
     [Fact]
-    public async Task RedirectToUrl_WithExistingShortCode_IncrementsClickCount()
+    public async Task RedirectToUrl_WithExistingShortCode_CallsService()
     {
         // Arrange
-        await using var context = CreateDbContext();
+        var serviceMock = new Mock<IUrlShortenerService>();
 
-        context.Urls.Add(new Url
-        {
-            OriginalUrl = "https://www.example.com",
-            ShortCode = "abc123",
-            CreatedAt = DateTime.UtcNow,
-            ClickCount = 0
-        });
+        serviceMock
+            .Setup(x => x.RedirectUrlAsync("abc123"))
+            .ReturnsAsync("https://www.example.com");
 
-        await context.SaveChangesAsync();
-
-        var controller = CreateController(context);
+        var controller = CreateController(
+            serviceMock.Object);
 
         // Act
         await controller.RedirectToUrl("abc123");
 
         // Assert
-        var url = await context.Urls
-            .SingleAsync(x => x.ShortCode == "abc123");
-
-        Assert.Equal(1, url.ClickCount);
+        serviceMock.Verify(
+            x => x.RedirectUrlAsync("abc123"),
+            Times.Once);
     }
 }

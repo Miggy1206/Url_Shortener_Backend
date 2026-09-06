@@ -1,16 +1,33 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using StackExchange.Redis;
 using UrlShortenerBackend.Api.Data;
 using UrlShortenerBackend.Api.Models;
 using UrlShortenerBackend.Api.Services;
-using Microsoft.Extensions.Logging;
+using UrlShortenerBackend.Tests.Integration;
 
 namespace UrlShortenerBackend.Tests.Services;
 
-public class UrlShortenerServiceTests
+public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 {
+    private readonly PostgresFixture _postgres;
+
+    public UrlShortenerServiceTests(PostgresFixture postgres)
+    {
+        _postgres = postgres;
+    }
+
+    private UrlShortenerDbContext CreateDbContext()
+    {
+        var options = new DbContextOptionsBuilder<UrlShortenerDbContext>()
+            .UseNpgsql(_postgres.ConnectionString)
+            .Options;
+
+        return new UrlShortenerDbContext(options);
+    }
+
     private static IConnectionMultiplexer CreateRedisMock()
     {
         var redisMock = new Mock<IConnectionMultiplexer>();
@@ -31,15 +48,6 @@ public class UrlShortenerServiceTests
         return redisMock.Object;
     }
 
-    private static UrlShortenerDbContext CreateDbContext()
-    {
-        var options = new DbContextOptionsBuilder<UrlShortenerDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options;
-
-        return new UrlShortenerDbContext(options);
-    }
-
     private static UrlShortenerService CreateService(
         UrlShortenerDbContext context,
         IConnectionMultiplexer redis,
@@ -51,12 +59,25 @@ public class UrlShortenerServiceTests
             logger ?? NullLogger<UrlShortenerService>.Instance);
     }
 
+    private async Task ClearUrlsAsync()
+    {
+        await using var context = CreateDbContext();
+
+        await context.Database.ExecuteSqlRawAsync(
+            "TRUNCATE TABLE \"Urls\" RESTART IDENTITY CASCADE");
+    }
+
     [Fact]
     public async Task CreateShortUrlAsync_WithValidUrl_CreatesUrl()
     {
         // Arrange
+        await ClearUrlsAsync();
+
         await using var context = CreateDbContext();
-        var service = CreateService(context, CreateRedisMock());
+
+        var service = CreateService(
+            context,
+            CreateRedisMock());
 
         // Act
         var result = await service.CreateShortUrlAsync(
@@ -78,8 +99,13 @@ public class UrlShortenerServiceTests
     public async Task CreateShortUrlAsync_GeneratesUniqueShortCodes()
     {
         // Arrange
+        await ClearUrlsAsync();
+
         await using var context = CreateDbContext();
-        var service = CreateService(context, CreateRedisMock());
+
+        var service = CreateService(
+            context,
+            CreateRedisMock());
 
         // Act
         var first = await service.CreateShortUrlAsync(
@@ -98,21 +124,24 @@ public class UrlShortenerServiceTests
     public async Task RedirectUrlAsync_WithExistingShortCode_ReturnsUrl()
     {
         // Arrange
-        await using var context = CreateDbContext();
-        var service = CreateService(context, CreateRedisMock());
+        await ClearUrlsAsync();
 
-        var created = await service.CreateShortUrlAsync(
-            "https://www.example.com");
+        await using var context = CreateDbContext();
+
+        var created = await serviceCreateUrlAsync(
+            context);
+
+        var service = CreateService(
+            context,
+            CreateRedisMock());
 
         // Act
         var result = await service.RedirectUrlAsync(
             created.ShortCode);
 
         // Assert
-        Assert.NotNull(result);
-
         Assert.Equal(
-            created.OriginalUrl,
+            "https://www.example.com",
             result);
     }
 
@@ -120,18 +149,25 @@ public class UrlShortenerServiceTests
     public async Task RedirectUrlAsync_WithExistingShortCode_IncrementsClickCount()
     {
         // Arrange
-        await using var context = CreateDbContext();
-        var service = CreateService(context, CreateRedisMock());
+        await ClearUrlsAsync();
 
-        var created = await service.CreateShortUrlAsync(
-            "https://www.example.com");
+        await using var context = CreateDbContext();
+
+        var created = await serviceCreateUrlAsync(
+            context);
+
+        var service = CreateService(
+            context,
+            CreateRedisMock());
 
         // Act
         await service.RedirectUrlAsync(
             created.ShortCode);
 
         // Assert
-        var savedUrl = await context.Urls
+        await using var verificationContext = CreateDbContext();
+
+        var savedUrl = await verificationContext.Urls
             .SingleAsync(x => x.ShortCode == created.ShortCode);
 
         Assert.Equal(1, savedUrl.ClickCount);
@@ -141,8 +177,13 @@ public class UrlShortenerServiceTests
     public async Task RedirectUrlAsync_WithUnknownShortCode_ReturnsNull()
     {
         // Arrange
+        await ClearUrlsAsync();
+
         await using var context = CreateDbContext();
-        var service = CreateService(context, CreateRedisMock());
+
+        var service = CreateService(
+            context,
+            CreateRedisMock());
 
         // Act
         var result = await service.RedirectUrlAsync("missing");
@@ -155,7 +196,19 @@ public class UrlShortenerServiceTests
     public async Task RedirectUrl_WithCachedUrl_ReturnsCachedUrl()
     {
         // Arrange
+        await ClearUrlsAsync();
+
         await using var context = CreateDbContext();
+
+        context.Urls.Add(new Url
+        {
+            OriginalUrl = "https://www.example.com",
+            ShortCode = "abc123",
+            CreatedAt = DateTime.UtcNow,
+            ClickCount = 0
+        });
+
+        await context.SaveChangesAsync();
 
         var redisMock = new Mock<IConnectionMultiplexer>();
         var databaseMock = new Mock<IDatabase>();
@@ -189,6 +242,8 @@ public class UrlShortenerServiceTests
     public async Task RedirectUrlAsync_WhenRedisReadFails_FallsBackToPostgres()
     {
         // Arrange
+        await ClearUrlsAsync();
+
         await using var context = CreateDbContext();
 
         context.Urls.Add(new Url
@@ -216,9 +271,9 @@ public class UrlShortenerServiceTests
                 It.IsAny<CommandFlags>()))
             .ThrowsAsync(
                 new RedisConnectionException(
-                ConnectionFailureType.UnableToConnect,
-                CommandFlags.None,
-                "Redis unavailable"));
+                    ConnectionFailureType.UnableToConnect,
+                    CommandFlags.None,
+                    "Redis unavailable"));
 
         var service = CreateService(
             context,
@@ -232,7 +287,9 @@ public class UrlShortenerServiceTests
             "https://www.example.com",
             result);
 
-        var savedUrl = await context.Urls
+        await using var verificationContext = CreateDbContext();
+
+        var savedUrl = await verificationContext.Urls
             .SingleAsync(x => x.ShortCode == "abc123");
 
         Assert.Equal(1, savedUrl.ClickCount);
@@ -242,6 +299,8 @@ public class UrlShortenerServiceTests
     public async Task RedirectUrlAsync_WhenRedisWriteFails_StillReturnsUrl()
     {
         // Arrange
+        await ClearUrlsAsync();
+
         await using var context = CreateDbContext();
 
         context.Urls.Add(new Url
@@ -271,17 +330,13 @@ public class UrlShortenerServiceTests
 
         databaseMock
             .Setup(x => x.StringSetAsync(
-                "url:abc123",
-                "https://www.example.com",
-                It.IsAny<TimeSpan?>(),
-                It.IsAny<bool>(),
-                It.IsAny<When>(),
-                It.IsAny<CommandFlags>()))
+                It.IsAny<RedisKey>(),
+                It.IsAny<RedisValue>()))
             .ThrowsAsync(
                 new RedisConnectionException(
-                ConnectionFailureType.UnableToConnect,
-                CommandFlags.None,
-                "Redis unavailable"));
+                    ConnectionFailureType.UnableToConnect,
+                    CommandFlags.None,
+                    "Redis unavailable"));
 
         var service = CreateService(
             context,
@@ -295,7 +350,9 @@ public class UrlShortenerServiceTests
             "https://www.example.com",
             result);
 
-        var savedUrl = await context.Urls
+        await using var verificationContext = CreateDbContext();
+
+        var savedUrl = await verificationContext.Urls
             .SingleAsync(x => x.ShortCode == "abc123");
 
         Assert.Equal(1, savedUrl.ClickCount);
@@ -305,6 +362,8 @@ public class UrlShortenerServiceTests
     public async Task RedirectUrlAsync_WhenRedisReadFails_LogsWarning()
     {
         // Arrange
+        await ClearUrlsAsync();
+
         await using var context = CreateDbContext();
 
         context.Urls.Add(new Url
@@ -367,6 +426,8 @@ public class UrlShortenerServiceTests
     public async Task RedirectUrlAsync_WhenRedisWriteFails_LogsWarning()
     {
         // Arrange
+        await ClearUrlsAsync();
+
         await using var context = CreateDbContext();
 
         context.Urls.Add(new Url
@@ -404,7 +465,7 @@ public class UrlShortenerServiceTests
                     ConnectionFailureType.UnableToConnect,
                     CommandFlags.None,
                     "Redis unavailable"));
-                    
+
         var service = CreateService(
             context,
             redisMock.Object,
@@ -417,6 +478,13 @@ public class UrlShortenerServiceTests
         Assert.Equal(
             "https://www.example.com",
             result);
+
+        await using var verificationContext = CreateDbContext();
+
+        var savedUrl = await verificationContext.Urls
+            .SingleAsync(x => x.ShortCode == "abc123");
+
+        Assert.Equal(1, savedUrl.ClickCount);
 
         loggerMock.Verify(
             x => x.Log(
@@ -431,4 +499,14 @@ public class UrlShortenerServiceTests
             Times.Once);
     }
 
+    private async Task<Url> serviceCreateUrlAsync(
+        UrlShortenerDbContext context)
+    {
+        var service = CreateService(
+            context,
+            CreateRedisMock());
+
+        return await service.CreateShortUrlAsync(
+            "https://www.example.com");
+    }
 }
