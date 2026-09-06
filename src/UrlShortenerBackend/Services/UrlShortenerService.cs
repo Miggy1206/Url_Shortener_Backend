@@ -99,13 +99,11 @@ public class UrlShortenerService(
             logger.LogInformation(
                 "Short code {ShortCode} not found in PostgreSQL.",
                 shortCode);
-    
+
             return null;
         }
 
-        url.ClickCount++;
-
-        await context.SaveChangesAsync();
+        await IncrementClickCountAsync(shortCode);
 
         try
         {
@@ -130,16 +128,11 @@ public class UrlShortenerService(
 
     private async Task IncrementClickCountAsync(string shortCode)
     {
-        var url = await context.Urls
-            .SingleOrDefaultAsync(x => x.ShortCode == shortCode);
-
-        if (url is null)
-        {
-            return;
-        }
-
-        url.ClickCount++;
-
-        await context.SaveChangesAsync();
+        await context.Urls
+            .Where(x => x.ShortCode == shortCode)
+            .ExecuteUpdateAsync(setters =>
+                setters.SetProperty(
+                    x => x.ClickCount,
+                    x => x.ClickCount + 1));
     }
 }

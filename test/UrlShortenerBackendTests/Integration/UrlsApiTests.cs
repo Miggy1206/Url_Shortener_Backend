@@ -4,6 +4,11 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using UrlShortenerBackend.Api.Data;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using StackExchange.Redis;
+using UrlShortenerBackend.Api.Models;
+using UrlShortenerBackend.Api.Services;
 
 namespace UrlShortenerBackend.Tests.Integration;
 
@@ -237,5 +242,81 @@ public class UrlsApiTests : IClassFixture<PostgresFixture>
         Assert.Equal(
             HttpStatusCode.TooManyRequests,
             limitedResponse.StatusCode);
+    }
+
+   [Fact]
+    public async Task RedirectUrl_WithConcurrentRequests_IncrementsClickCountCorrectly()
+    {
+        // Arrange
+        var shortCode = $"test{Guid.NewGuid():N}"[..6];
+
+        await using (var context = new UrlShortenerDbContext(
+            new DbContextOptionsBuilder<UrlShortenerDbContext>()
+                .UseNpgsql(_postgres.ConnectionString)
+                .Options))
+        {
+            context.Urls.Add(new Url
+            {
+                OriginalUrl = "https://www.example.com",
+                ShortCode = shortCode,
+                CreatedAt = DateTime.UtcNow,
+                ClickCount = 0
+            });
+
+            await context.SaveChangesAsync();
+        }
+
+        const int requestCount = 100;
+
+        // Act
+        var tasks = Enumerable.Range(0, requestCount)
+            .Select(async _ =>
+            {
+                await using var context = new UrlShortenerDbContext(
+                    new DbContextOptionsBuilder<UrlShortenerDbContext>()
+                        .UseNpgsql(_postgres.ConnectionString)
+                        .Options);
+
+                var redisMock = new Mock<IConnectionMultiplexer>();
+                var databaseMock = new Mock<IDatabase>();
+
+                redisMock
+                    .Setup(x => x.GetDatabase(
+                        It.IsAny<int>(),
+                        It.IsAny<object?>()))
+                    .Returns(databaseMock.Object);
+
+                databaseMock
+                    .Setup(x => x.StringGetAsync(
+                        It.IsAny<RedisKey>(),
+                        It.IsAny<CommandFlags>()))
+                    .ReturnsAsync(RedisValue.Null);
+
+                var service = new UrlShortenerService(
+                    context,
+                    redisMock.Object,
+                    NullLogger<UrlShortenerService>.Instance);
+
+                return await service.RedirectUrlAsync(shortCode);
+            });
+
+        var results = await Task.WhenAll(tasks);
+
+        // Assert
+        Assert.All(
+            results,
+            result => Assert.Equal(
+                "https://www.example.com",
+                result));
+
+        await using var verificationContext = new UrlShortenerDbContext(
+            new DbContextOptionsBuilder<UrlShortenerDbContext>()
+                .UseNpgsql(_postgres.ConnectionString)
+                .Options);
+
+        var savedUrl = await verificationContext.Urls
+            .SingleAsync(x => x.ShortCode == shortCode);
+
+        Assert.Equal(requestCount, savedUrl.ClickCount);
     }
 }

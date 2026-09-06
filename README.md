@@ -219,6 +219,22 @@ If a Redis write fails after successfully retrieving the URL from PostgreSQL, th
 
 This prevents a Redis outage from unnecessarily making the URL redirection functionality unavailable.
 
+### Click Count Concurrency
+
+Click counts are updated atomically at the database level using PostgreSQL's incremental update semantics.
+
+The service performs:
+
+```text
+ClickCount = ClickCount + 1
+```
+
+within the database rather than relying on a read-modify-write sequence in application memory.
+
+This avoids lost updates when multiple requests increment the same URL concurrently.
+
+Concurrency tests verify that simultaneous redirect requests produce the expected final click count.
+
 ### Rate Limiting
 
 The API uses endpoint-specific rate limiting to protect against excessive requests.
@@ -336,6 +352,7 @@ The project uses multiple levels of automated testing:
 - **Integration tests** for API behaviour and database persistence.
 - **Testcontainers** to run PostgreSQL during integration tests.
 - **Moq** to isolate Redis dependencies in unit tests.
+- **Concurrency tests** to validate correct behaviour under simultaneous requests.
 
 The test suite verifies functionality including:
 
@@ -351,9 +368,11 @@ The test suite verifies functionality including:
 - Maximum URL length validation
 - Short-code generation
 - Short-code uniqueness
+- Database-level collision handling
 - URL redirection
 - HTTP 302 responses
 - Click-count tracking
+- Concurrent click-count updates
 - Non-existent short codes
 - Redis cache behaviour
 - Redis read failure fallback to PostgreSQL
@@ -375,7 +394,7 @@ dotnet test
 
 🚧 **In development**
 
-The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, and AWS container registry integration.
+The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, concurrency handling, and AWS container registry integration.
 
 ### Completed
 
@@ -384,9 +403,11 @@ The initial API and database foundation have been implemented alongside a servic
 - Entity Framework Core
 - Database migrations
 - Short-code generation and uniqueness enforcement
+- Database-level collision handling
 - Service layer
 - Unit testing
 - Integration testing
+- Concurrency testing
 - Request validation
 - HTTP/HTTPS URL scheme validation
 - Maximum URL length validation
@@ -405,6 +426,8 @@ The initial API and database foundation have been implemented alongside a servic
 - Structured application logging
 - Structured logging for important URL lifecycle events and Redis failures
 - Logging tests for Redis failure scenarios
+- Atomic click-count updates
+- Concurrent click-count correctness testing
 - Dockerised PostgreSQL
 - Dockerised Redis
 - Dockerised ASP.NET Core API
@@ -423,8 +446,6 @@ The initial API and database foundation have been implemented alongside a servic
 
 ### Planned
 
-- Concurrency testing
-- Click-count concurrency improvements
 - Metrics, dashboards, and distributed tracing
 - AWS application deployment
 - AWS networking architecture
