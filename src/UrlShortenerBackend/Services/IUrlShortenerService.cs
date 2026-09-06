@@ -6,5 +6,7 @@ public interface IUrlShortenerService
 {
     Task<Url> CreateShortUrlAsync(string originalUrl);
     Task<string?> RedirectUrlAsync(string shortCode);
+    Task<string?> GetOriginalUrlBenchmarkAsync(string shortCode);
+    Task IncrementClickCountBenchmarkAsync(string shortCode);
 
 }

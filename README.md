@@ -15,6 +15,7 @@ The focus is on understanding how distributed services are designed, tested, con
 - [CI/CD](#cicd)
 - [Tech Stack](#tech-stack)
 - [Testing](#testing)
+- [Load Testing](#load-testing)
 - [Project Status](#project-status)
 
 ## Objectives
@@ -338,6 +339,7 @@ AWS application deployment is not currently part of the CI/CD pipeline.
 | Testcontainers        | Database integration testing        |
 | Docker                | Containerisation                    |
 | Docker Compose        | Local service orchestration         |
+| k6                    | Load and performance testing        |
 | Trivy                 | Container vulnerability scanning    |
 | GitHub Actions        | CI/CD automation                    |
 | AWS ECR               | Container image registry            |
@@ -390,11 +392,19 @@ Run the complete test suite with:
 dotnet test
 ```
 
+## Load Testing
+
+Load and performance testing is performed using [k6](https://k6.io/).
+
+Load-test scripts, benchmark results, and instructions for running the performance tests are available in the [`load-tests/README.md`](load-tests/README.md).
+
+Initial benchmarking identified synchronous click-count persistence as a key performance bottleneck under concurrent load.
+
 ## Project Status
 
 🚧 **In development**
 
-The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, concurrency handling, and AWS container registry integration.
+The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, concurrency handling, performance benchmarking, and AWS container registry integration.
 
 ### Completed
 
@@ -428,6 +438,9 @@ The initial API and database foundation have been implemented alongside a servic
 - Logging tests for Redis failure scenarios
 - Atomic click-count updates
 - Concurrent click-count correctness testing
+- k6 load-testing infrastructure
+- Initial performance benchmarking
+- Performance bottleneck identification
 - Dockerised PostgreSQL
 - Dockerised Redis
 - Dockerised ASP.NET Core API
@@ -446,14 +459,15 @@ The initial API and database foundation have been implemented alongside a servic
 
 ### Planned
 
+- Decoupled/asynchronous click-count persistence
 - Metrics, dashboards, and distributed tracing
+- Higher-concurrency load testing
+- Performance optimisation
+- Security hardening
 - AWS application deployment
 - AWS networking architecture
 - Managed PostgreSQL deployment
 - Managed Redis deployment
-- Load testing
-- Performance benchmarking and optimisation
-- Security hardening
 - Kubernetes deployment
 - Distributed system scalability
 - Resilience and fault-tolerance patterns

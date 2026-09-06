@@ -135,4 +135,22 @@ public class UrlShortenerService(
                     x => x.ClickCount,
                     x => x.ClickCount + 1));
     }
+
+    public async Task<string?> GetOriginalUrlBenchmarkAsync(string shortCode)
+    {
+        return await context.Urls
+            .Where(x => x.ShortCode == shortCode)
+            .Select(x => x.OriginalUrl)
+            .SingleOrDefaultAsync();
+    }
+
+    public async Task IncrementClickCountBenchmarkAsync(string shortCode)
+    {
+        await context.Urls
+            .Where(x => x.ShortCode == shortCode)
+            .ExecuteUpdateAsync(setters =>
+                setters.SetProperty(
+                    x => x.ClickCount,
+                    x => x.ClickCount + 1));
+    }
 }
