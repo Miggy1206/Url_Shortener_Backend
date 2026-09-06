@@ -38,12 +38,20 @@ public class UrlShortenerService(
             {
                 await context.SaveChangesAsync();
 
+                logger.LogInformation(
+                    "Short URL created with short code {ShortCode}",
+                    shortCode);
+
                 return url;
             }
             catch (DbUpdateException ex) when (
                 ex.InnerException is PostgresException postgresException &&
                 postgresException.SqlState == PostgresErrorCodes.UniqueViolation)
             {
+                logger.LogWarning(
+                    "Short-code collision detected for {ShortCode} on attempt {Attempt}",
+                    shortCode,
+                    attempt + 1);
                 context.Entry(url).State = EntityState.Detached;
             }
         }
@@ -64,8 +72,16 @@ public class UrlShortenerService(
             {
                 await IncrementClickCountAsync(shortCode);
 
+                logger.LogDebug(
+                    "Redis cache hit for short code {ShortCode}",
+                    shortCode);
+
                 return cachedOriginalUrl!;
             }
+
+            logger.LogDebug(
+                "Redis cache miss for short code {ShortCode}",
+                shortCode);
         }
         catch (RedisException ex)
         {
@@ -80,6 +96,10 @@ public class UrlShortenerService(
 
         if (url is null)
         {
+            logger.LogInformation(
+                "Short code {ShortCode} not found in PostgreSQL.",
+                shortCode);
+    
             return null;
         }
 
@@ -100,6 +120,10 @@ public class UrlShortenerService(
                 "Redis write failed for short code {ShortCode}. Continuing without cache.",
                 shortCode);
         }
+
+        logger.LogInformation(
+            "Redirect completed for short code {ShortCode}",
+            shortCode);
 
         return url.OriginalUrl;
     }

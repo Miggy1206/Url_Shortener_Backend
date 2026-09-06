@@ -238,6 +238,26 @@ Requests exceeding the configured limit return:
 
 Rate limiting is implemented using ASP.NET Core's built-in rate-limiting middleware.
 
+### Logging
+
+The service uses ASP.NET Core's built-in `ILogger` abstraction for structured application logging.
+
+Logs are generated for important application events, including:
+
+- Short URL creation
+- Redis cache hits and misses
+- URL redirects
+- Unknown short codes
+- Short-code collisions
+- Redis read failures
+- Redis write failures
+
+Structured logging is used so operational properties such as `ShortCode` and retry attempts can be captured as structured fields rather than embedded directly into log messages.
+
+Sensitive information, including credentials and unnecessary request data, is not logged.
+
+The logging implementation is designed to integrate with cloud-based observability platforms such as AWS CloudWatch when the application is deployed to AWS.
+
 ## Docker
 
 The application is containerised using a multi-stage Docker build.
@@ -338,6 +358,7 @@ The test suite verifies functionality including:
 - Redis cache behaviour
 - Redis read failure fallback to PostgreSQL
 - Redis write failure resilience
+- Redis failure logging
 - PostgreSQL persistence
 - Rate limiting for URL creation
 - Rate limiting for redirects
@@ -354,7 +375,7 @@ dotnet test
 
 🚧 **In development**
 
-The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, and AWS container registry integration.
+The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, and AWS container registry integration.
 
 ### Completed
 
@@ -381,6 +402,9 @@ The initial API and database foundation have been implemented alongside a servic
 - Redis cache-aside implementation
 - Redis failure resilience and PostgreSQL fallback
 - Redis failure resilience tests
+- Structured application logging
+- Structured logging for important URL lifecycle events and Redis failures
+- Logging tests for Redis failure scenarios
 - Dockerised PostgreSQL
 - Dockerised Redis
 - Dockerised ASP.NET Core API
@@ -399,16 +423,16 @@ The initial API and database foundation have been implemented alongside a servic
 
 ### Planned
 
-- Structured logging and observability
 - Concurrency testing
 - Click-count concurrency improvements
-- Load testing
-- Performance benchmarking and optimisation
-- Security hardening
+- Metrics, dashboards, and distributed tracing
 - AWS application deployment
 - AWS networking architecture
 - Managed PostgreSQL deployment
 - Managed Redis deployment
+- Load testing
+- Performance benchmarking and optimisation
+- Security hardening
 - Kubernetes deployment
 - Distributed system scalability
 - Resilience and fault-tolerance patterns
