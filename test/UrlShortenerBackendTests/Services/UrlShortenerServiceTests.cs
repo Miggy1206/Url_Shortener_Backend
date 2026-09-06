@@ -5,6 +5,7 @@ using StackExchange.Redis;
 using UrlShortenerBackend.Api.Data;
 using UrlShortenerBackend.Api.Models;
 using UrlShortenerBackend.Api.Services;
+using Microsoft.Extensions.Logging;
 
 namespace UrlShortenerBackend.Tests.Services;
 
@@ -41,12 +42,13 @@ public class UrlShortenerServiceTests
 
     private static UrlShortenerService CreateService(
         UrlShortenerDbContext context,
-        IConnectionMultiplexer redis)
+        IConnectionMultiplexer redis,
+        ILogger<UrlShortenerService>? logger = null)
     {
         return new UrlShortenerService(
             context,
             redis,
-            NullLogger<UrlShortenerService>.Instance);
+            logger ?? NullLogger<UrlShortenerService>.Instance);
     }
 
     [Fact]
@@ -298,4 +300,135 @@ public class UrlShortenerServiceTests
 
         Assert.Equal(1, savedUrl.ClickCount);
     }
+
+    [Fact]
+    public async Task RedirectUrlAsync_WhenRedisReadFails_LogsWarning()
+    {
+        // Arrange
+        await using var context = CreateDbContext();
+
+        context.Urls.Add(new Url
+        {
+            OriginalUrl = "https://www.example.com",
+            ShortCode = "abc123",
+            CreatedAt = DateTime.UtcNow,
+            ClickCount = 0
+        });
+
+        await context.SaveChangesAsync();
+
+        var redisMock = new Mock<IConnectionMultiplexer>();
+        var databaseMock = new Mock<IDatabase>();
+        var loggerMock = new Mock<ILogger<UrlShortenerService>>();
+
+        redisMock
+            .Setup(x => x.GetDatabase(
+                It.IsAny<int>(),
+                It.IsAny<object?>()))
+            .Returns(databaseMock.Object);
+
+        databaseMock
+            .Setup(x => x.StringGetAsync(
+                "url:abc123",
+                It.IsAny<CommandFlags>()))
+            .ThrowsAsync(
+                new RedisConnectionException(
+                    ConnectionFailureType.UnableToConnect,
+                    CommandFlags.None,
+                    "Redis unavailable"));
+
+        var service = CreateService(
+            context,
+            redisMock.Object,
+            loggerMock.Object);
+
+        // Act
+        var result = await service.RedirectUrlAsync("abc123");
+
+        // Assert
+        Assert.Equal(
+            "https://www.example.com",
+            result);
+
+        loggerMock.Verify(
+            x => x.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>(
+                    (state, type) =>
+                        state.ToString()!.Contains(
+                            "Redis read failed")),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RedirectUrlAsync_WhenRedisWriteFails_LogsWarning()
+    {
+        // Arrange
+        await using var context = CreateDbContext();
+
+        context.Urls.Add(new Url
+        {
+            OriginalUrl = "https://www.example.com",
+            ShortCode = "abc123",
+            CreatedAt = DateTime.UtcNow,
+            ClickCount = 0
+        });
+
+        await context.SaveChangesAsync();
+
+        var redisMock = new Mock<IConnectionMultiplexer>();
+        var databaseMock = new Mock<IDatabase>();
+        var loggerMock = new Mock<ILogger<UrlShortenerService>>();
+
+        redisMock
+            .Setup(x => x.GetDatabase(
+                It.IsAny<int>(),
+                It.IsAny<object?>()))
+            .Returns(databaseMock.Object);
+
+        databaseMock
+            .Setup(x => x.StringGetAsync(
+                "url:abc123",
+                It.IsAny<CommandFlags>()))
+            .ReturnsAsync(RedisValue.Null);
+
+        databaseMock
+            .Setup(x => x.StringSetAsync(
+                It.IsAny<RedisKey>(),
+                It.IsAny<RedisValue>()))
+            .ThrowsAsync(
+                new RedisConnectionException(
+                    ConnectionFailureType.UnableToConnect,
+                    CommandFlags.None,
+                    "Redis unavailable"));
+                    
+        var service = CreateService(
+            context,
+            redisMock.Object,
+            loggerMock.Object);
+
+        // Act
+        var result = await service.RedirectUrlAsync("abc123");
+
+        // Assert
+        Assert.Equal(
+            "https://www.example.com",
+            result);
+
+        loggerMock.Verify(
+            x => x.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>(
+                    (state, type) =>
+                        state.ToString()!.Contains(
+                            "Redis write failed")),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
+
 }
