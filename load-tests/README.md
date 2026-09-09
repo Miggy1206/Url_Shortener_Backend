@@ -2,13 +2,14 @@
 
 Load testing for the URL Shortener Backend is performed using [k6](https://k6.io/).
 
-These tests are intended to measure application performance under concurrent load and identify potential bottlenecks.
+These tests are intended to measure application performance under concurrent load, identify bottlenecks, and validate the impact of performance improvements.
 
 ## Prerequisites
 
 - k6 installed
 - PostgreSQL running
 - Redis running
+- Kafka running
 - API running locally
 - A valid shortened URL available for the redirect tests
 
@@ -66,7 +67,7 @@ ClickCount = ClickCount + 1
 
 It isolates the database write from the rest of the redirect request.
 
-## Results
+## Baseline Results
 
 Initial local benchmarks were performed using:
 
@@ -87,11 +88,61 @@ The PostgreSQL read-only workload significantly outperformed the other tests.
 
 The atomic click-count update produced almost identical performance to the complete redirect request.
 
-This indicates that the synchronous click-count database update is currently the primary performance bottleneck when multiple requests attempt to update the same URL concurrently.
+This indicated that the synchronous click-count database update was the primary performance bottleneck when multiple requests attempted to update the same URL concurrently.
 
-The current implementation prioritises correctness by using an atomic database update to prevent lost click-count updates.
+The synchronous implementation prioritised correctness by using an atomic database update to prevent lost click-count updates, but this placed a database write directly on the redirect request path.
 
-Future performance work will investigate decoupling click-count persistence from the redirect request path.
+## Kafka-Based Asynchronous Click Processing
+
+Click-count persistence was subsequently decoupled from the redirect request using Kafka.
+
+The request path is now:
+
+```text
+GET /{shortCode}
+       │
+       ├── Redis lookup
+       │
+       ├── Publish UrlClickedEvent to Kafka
+       │
+       └── Return 302
+                  │
+                  ▼
+             Kafka topic
+                  │
+                  ▼
+        ClickEventConsumer
+                  │
+                  ▼
+             PostgreSQL
+```
+
+This removes the synchronous PostgreSQL click-count update from the redirect path while retaining asynchronous persistence and idempotent event processing.
+
+## Post-Kafka Results
+
+A second local benchmark was performed using the same:
+
+```text
+25 virtual users
+30 second duration
+```
+
+| Test                         |   Throughput | Average Latency | p95 Latency | Error Rate |
+| ---------------------------- | -----------: | --------------: | ----------: | ---------: |
+| Full redirect (before Kafka) |   ~207 req/s |       120.50 ms |   330.09 ms |         0% |
+| Full redirect (after Kafka)  | ~2,173 req/s |        11.38 ms |    14.06 ms |         0% |
+
+The post-Kafka benchmark resulted in approximately:
+
+- **10.5× higher throughput**
+- **10.6× lower average latency**
+- **23.5× lower p95 latency**
+- **0% errors in both runs**
+
+These results demonstrate that removing the synchronous PostgreSQL click-count update from the redirect request path substantially improves performance under concurrent load.
+
+The benchmark measures the complete application path, including Kafka event publication, so the improvement should be interpreted as the result of the architectural change as a whole rather than attributed to Kafka alone.
 
 ## Rate Limiting
 
@@ -114,4 +165,4 @@ The most useful metrics when comparing runs are:
 - **p95 latency** — latency experienced by the slowest 5% of requests
 - **Error rate** — percentage of failed requests
 
-Performance changes should be compared against the baseline above rather than judged from a single metric.
+Performance changes should be compared against the recorded baseline using consistent virtual-user counts and test durations.

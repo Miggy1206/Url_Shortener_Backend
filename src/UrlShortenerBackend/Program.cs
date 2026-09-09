@@ -3,7 +3,8 @@ using UrlShortenerBackend.Api.Data;
 using UrlShortenerBackend.Api.Services;
 using StackExchange.Redis;
 using System.Threading.RateLimiting;
-using Microsoft.AspNetCore.RateLimiting;
+using Confluent.Kafka;
+using UrlShortenerBackend.Api.Kafka;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,6 +19,9 @@ builder.Services.AddControllers();
 builder.Services.AddHealthChecks();
 builder.Services.AddScoped<IUrlShortenerService, UrlShortenerService>();
 builder.Services.AddProblemDetails();
+builder.Services.AddScoped<IUrlRepository, UrlRepository>();
+builder.Services.AddScoped<IClickEventProcessor, ClickEventProcessor>();
+builder.Services.AddHostedService<ClickEventConsumer>();
 
 builder.Services.AddRateLimiter(options =>
 {
@@ -54,6 +58,29 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(
     ConnectionMultiplexer.Connect(
         builder.Configuration["Redis:ConnectionString"]!));
 
+builder.Services.AddSingleton<IProducer<string, string>>(
+    serviceProvider =>
+    {
+        var configuration =
+            serviceProvider.GetRequiredService<IConfiguration>();
+
+        var bootstrapServers =
+            configuration["Kafka:BootstrapServers"]
+            ?? throw new InvalidOperationException(
+                "Kafka:BootstrapServers is not configured.");
+
+        var producerConfig = new ProducerConfig
+        {
+            BootstrapServers = bootstrapServers
+        };
+
+        return new ProducerBuilder<string, string>(
+            producerConfig)
+            .Build();
+    });
+
+builder.Services.AddScoped<IClickEventProducer, ClickEventProducer>();
+
 var app = builder.Build();
 
 app.MapHealthChecks("/healthz");
@@ -75,7 +102,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
-//app.UseRateLimiter();
+app.UseRateLimiter();
 
 app.MapControllers();
 

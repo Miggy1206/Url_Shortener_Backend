@@ -4,6 +4,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using StackExchange.Redis;
 using UrlShortenerBackend.Api.Data;
+using UrlShortenerBackend.Api.Kafka;
+using UrlShortenerBackend.Api.Kafka.Events;
 using UrlShortenerBackend.Api.Models;
 using UrlShortenerBackend.Api.Services;
 using UrlShortenerBackend.Tests.Integration;
@@ -48,14 +50,29 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
         return redisMock.Object;
     }
 
+    private static Mock<IClickEventProducer> CreateClickEventProducerMock()
+    {
+        var producerMock = new Mock<IClickEventProducer>();
+
+        producerMock
+            .Setup(x => x.PublishAsync(
+                It.IsAny<UrlClickedEvent>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        return producerMock;
+    }
+
     private static UrlShortenerService CreateService(
         UrlShortenerDbContext context,
         IConnectionMultiplexer redis,
+        IClickEventProducer? clickEventProducer = null,
         ILogger<UrlShortenerService>? logger = null)
     {
         return new UrlShortenerService(
             context,
             redis,
+            clickEventProducer ?? CreateClickEventProducerMock().Object,
             logger ?? NullLogger<UrlShortenerService>.Instance);
     }
 
@@ -128,8 +145,7 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         await using var context = CreateDbContext();
 
-        var created = await serviceCreateUrlAsync(
-            context);
+        var created = await ServiceCreateUrlAsync(context);
 
         var service = CreateService(
             context,
@@ -146,31 +162,33 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
     }
 
     [Fact]
-    public async Task RedirectUrlAsync_WithExistingShortCode_IncrementsClickCount()
+    public async Task RedirectUrlAsync_WithExistingShortCode_PublishesClickEvent()
     {
         // Arrange
         await ClearUrlsAsync();
 
         await using var context = CreateDbContext();
 
-        var created = await serviceCreateUrlAsync(
-            context);
+        var created = await ServiceCreateUrlAsync(context);
+
+        var producerMock = CreateClickEventProducerMock();
 
         var service = CreateService(
             context,
-            CreateRedisMock());
+            CreateRedisMock(),
+            producerMock.Object);
 
         // Act
         await service.RedirectUrlAsync(
             created.ShortCode);
 
         // Assert
-        await using var verificationContext = CreateDbContext();
-
-        var savedUrl = await verificationContext.Urls
-            .SingleAsync(x => x.ShortCode == created.ShortCode);
-
-        Assert.Equal(1, savedUrl.ClickCount);
+        producerMock.Verify(
+            x => x.PublishAsync(
+                It.Is<UrlClickedEvent>(
+                    e => e.ShortCode == created.ShortCode),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -181,15 +199,25 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         await using var context = CreateDbContext();
 
+        var producerMock = CreateClickEventProducerMock();
+
         var service = CreateService(
             context,
-            CreateRedisMock());
+            CreateRedisMock(),
+            producerMock.Object);
 
         // Act
-        var result = await service.RedirectUrlAsync("missing");
+        var result = await service.RedirectUrlAsync(
+            "missing");
 
         // Assert
         Assert.Null(result);
+
+        producerMock.Verify(
+            x => x.PublishAsync(
+                It.IsAny<UrlClickedEvent>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
@@ -212,6 +240,7 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         var redisMock = new Mock<IConnectionMultiplexer>();
         var databaseMock = new Mock<IDatabase>();
+        var producerMock = CreateClickEventProducerMock();
 
         redisMock
             .Setup(x => x.GetDatabase(
@@ -227,15 +256,24 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         var service = CreateService(
             context,
-            redisMock.Object);
+            redisMock.Object,
+            producerMock.Object);
 
         // Act
-        var result = await service.RedirectUrlAsync("abc123");
+        var result = await service.RedirectUrlAsync(
+            "abc123");
 
         // Assert
         Assert.Equal(
             "https://www.example.com",
             result);
+
+        producerMock.Verify(
+            x => x.PublishAsync(
+                It.Is<UrlClickedEvent>(
+                    e => e.ShortCode == "abc123"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -258,6 +296,7 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         var redisMock = new Mock<IConnectionMultiplexer>();
         var databaseMock = new Mock<IDatabase>();
+        var producerMock = CreateClickEventProducerMock();
 
         redisMock
             .Setup(x => x.GetDatabase(
@@ -277,22 +316,24 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         var service = CreateService(
             context,
-            redisMock.Object);
+            redisMock.Object,
+            producerMock.Object);
 
         // Act
-        var result = await service.RedirectUrlAsync("abc123");
+        var result = await service.RedirectUrlAsync(
+            "abc123");
 
         // Assert
         Assert.Equal(
             "https://www.example.com",
             result);
 
-        await using var verificationContext = CreateDbContext();
-
-        var savedUrl = await verificationContext.Urls
-            .SingleAsync(x => x.ShortCode == "abc123");
-
-        Assert.Equal(1, savedUrl.ClickCount);
+        producerMock.Verify(
+            x => x.PublishAsync(
+                It.Is<UrlClickedEvent>(
+                    e => e.ShortCode == "abc123"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -315,6 +356,7 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         var redisMock = new Mock<IConnectionMultiplexer>();
         var databaseMock = new Mock<IDatabase>();
+        var producerMock = CreateClickEventProducerMock();
 
         redisMock
             .Setup(x => x.GetDatabase(
@@ -324,7 +366,7 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         databaseMock
             .Setup(x => x.StringGetAsync(
-                "url:abc123",
+                It.IsAny<RedisKey>(),
                 It.IsAny<CommandFlags>()))
             .ReturnsAsync(RedisValue.Null);
 
@@ -340,22 +382,24 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         var service = CreateService(
             context,
-            redisMock.Object);
+            redisMock.Object,
+            producerMock.Object);
 
         // Act
-        var result = await service.RedirectUrlAsync("abc123");
+        var result = await service.RedirectUrlAsync(
+            "abc123");
 
         // Assert
         Assert.Equal(
             "https://www.example.com",
             result);
 
-        await using var verificationContext = CreateDbContext();
-
-        var savedUrl = await verificationContext.Urls
-            .SingleAsync(x => x.ShortCode == "abc123");
-
-        Assert.Equal(1, savedUrl.ClickCount);
+        producerMock.Verify(
+            x => x.PublishAsync(
+                It.Is<UrlClickedEvent>(
+                    e => e.ShortCode == "abc123"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -378,6 +422,7 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         var redisMock = new Mock<IConnectionMultiplexer>();
         var databaseMock = new Mock<IDatabase>();
+        var producerMock = CreateClickEventProducerMock();
         var loggerMock = new Mock<ILogger<UrlShortenerService>>();
 
         redisMock
@@ -399,10 +444,12 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
         var service = CreateService(
             context,
             redisMock.Object,
+            producerMock.Object,
             loggerMock.Object);
 
         // Act
-        var result = await service.RedirectUrlAsync("abc123");
+        var result = await service.RedirectUrlAsync(
+            "abc123");
 
         // Assert
         Assert.Equal(
@@ -442,6 +489,7 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
 
         var redisMock = new Mock<IConnectionMultiplexer>();
         var databaseMock = new Mock<IDatabase>();
+        var producerMock = CreateClickEventProducerMock();
         var loggerMock = new Mock<ILogger<UrlShortenerService>>();
 
         redisMock
@@ -469,22 +517,24 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
         var service = CreateService(
             context,
             redisMock.Object,
+            producerMock.Object,
             loggerMock.Object);
 
         // Act
-        var result = await service.RedirectUrlAsync("abc123");
+        var result = await service.RedirectUrlAsync(
+            "abc123");
 
         // Assert
         Assert.Equal(
             "https://www.example.com",
             result);
 
-        await using var verificationContext = CreateDbContext();
-
-        var savedUrl = await verificationContext.Urls
-            .SingleAsync(x => x.ShortCode == "abc123");
-
-        Assert.Equal(1, savedUrl.ClickCount);
+        producerMock.Verify(
+            x => x.PublishAsync(
+                It.Is<UrlClickedEvent>(
+                    e => e.ShortCode == "abc123"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
 
         loggerMock.Verify(
             x => x.Log(
@@ -499,7 +549,7 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
             Times.Once);
     }
 
-    private async Task<Url> serviceCreateUrlAsync(
+    private async Task<Url> ServiceCreateUrlAsync(
         UrlShortenerDbContext context)
     {
         var service = CreateService(

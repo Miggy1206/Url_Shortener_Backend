@@ -1,10 +1,11 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using UrlShortenerBackend.Tests.Integration;
 
-namespace UrlShortenerBackend.Tests.Integration;
+namespace UrlShortenerBackend.Tests.Kafka;
 
-public class ApiFactory(PostgresFixture postgresFixture)
+public class KafkaTestFactory(PostgresFixture postgresFixture)
     : WebApplicationFactory<Program>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -23,7 +24,7 @@ public class ApiFactory(PostgresFixture postgresFixture)
                     "url-clicked",
 
                 ["Kafka:ConsumerGroup"] =
-                    "click-count-test-consumer"
+                    $"click-count-consumer-test-{Guid.NewGuid():N}"
             });
         });
     }
