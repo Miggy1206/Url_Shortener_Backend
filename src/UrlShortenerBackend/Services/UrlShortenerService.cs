@@ -3,12 +3,15 @@ using Npgsql;
 using StackExchange.Redis;
 using UrlShortenerBackend.Api.Data;
 using UrlShortenerBackend.Api.Models;
+using UrlShortenerBackend.Api.Kafka;
+using UrlShortenerBackend.Api.Kafka.Events;
 
 namespace UrlShortenerBackend.Api.Services;
 
 public class UrlShortenerService(
     UrlShortenerDbContext context,
     IConnectionMultiplexer redis,
+    IClickEventProducer clickEventProducer,
     ILogger<UrlShortenerService> logger) : IUrlShortenerService
 {
     private readonly IDatabase _cache = redis.GetDatabase();
@@ -70,7 +73,11 @@ public class UrlShortenerService(
 
             if (cachedOriginalUrl.HasValue)
             {
-                await IncrementClickCountAsync(shortCode);
+                await clickEventProducer.PublishAsync(
+                    new UrlClickedEvent(
+                        EventId: Guid.NewGuid(),
+                        ShortCode: shortCode,
+                        OccurredAt: DateTime.UtcNow));
 
                 logger.LogDebug(
                     "Redis cache hit for short code {ShortCode}",
@@ -103,7 +110,12 @@ public class UrlShortenerService(
             return null;
         }
 
-        await IncrementClickCountAsync(shortCode);
+
+        await clickEventProducer.PublishAsync(
+            new UrlClickedEvent(
+                EventId: Guid.NewGuid(),
+                ShortCode: shortCode,
+                OccurredAt: DateTime.UtcNow));
 
         try
         {
@@ -124,16 +136,6 @@ public class UrlShortenerService(
             shortCode);
 
         return url.OriginalUrl;
-    }
-
-    private async Task IncrementClickCountAsync(string shortCode)
-    {
-        await context.Urls
-            .Where(x => x.ShortCode == shortCode)
-            .ExecuteUpdateAsync(setters =>
-                setters.SetProperty(
-                    x => x.ClickCount,
-                    x => x.ClickCount + 1));
     }
 
     public async Task<string?> GetOriginalUrlBenchmarkAsync(string shortCode)

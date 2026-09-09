@@ -8,10 +8,16 @@ public class UrlShortenerDbContext(DbContextOptions<UrlShortenerDbContext> optio
 {
     public DbSet<Url> Urls => Set<Url>();
 
+    public DbSet<ProcessedClickEvent> ProcessedClickEvents =>
+        Set<ProcessedClickEvent>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     modelBuilder.Entity<Url>()
         .HasIndex(x => x.ShortCode)
         .IsUnique();
+
+    modelBuilder.Entity<ProcessedClickEvent>()
+        .HasKey(x => x.EventId);
 }
 }

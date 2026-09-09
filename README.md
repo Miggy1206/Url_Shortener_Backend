@@ -4,11 +4,12 @@ A distributed URL shortening service built with **C# and .NET 10**.
 
 The project is designed as a practical exploration of modern backend and distributed systems engineering, progressing from a simple API into a scalable, production-oriented service.
 
-The focus is on understanding how distributed services are designed, tested, containerised, deployed, and scaled, while exploring technologies such as PostgreSQL, Redis, Docker, AWS, and Kubernetes.
+The focus is on understanding how distributed services are designed, tested, containerised, deployed, and scaled, while exploring technologies such as PostgreSQL, Redis, Kafka, Docker, AWS, and Kubernetes.
 
 ## Table of Contents
 
 - [Objectives](#objectives)
+- [Architecture](#architecture)
 - [Setup](#setup)
 - [API](#api)
 - [Docker](#docker)
@@ -26,11 +27,71 @@ The main objectives of this project are to:
 - Explore **distributed systems architecture**, scalability, availability, and fault tolerance.
 - Develop practical experience with **PostgreSQL and Entity Framework Core**.
 - Use **Redis** for distributed caching and performance optimisation.
+- Use **Apache Kafka** for asynchronous event processing and event-driven architecture.
 - Apply automated **unit and integration testing** throughout development.
 - Learn containerisation and service orchestration using **Docker and Kubernetes**.
 - Explore **AWS** and cloud-based infrastructure.
-- Understand concepts such as **load balancing, service communication, caching, concurrency, observability, and resilience**.
+- Understand concepts such as **load balancing, service communication, caching, concurrency, observability, messaging, and resilience**.
 - Apply software engineering principles around **architecture, maintainability, scalability, security, and performance**.
+
+## Architecture
+
+The application currently consists of an ASP.NET Core API backed by PostgreSQL and Redis, with Kafka used to decouple click-count processing from the redirect request.
+
+A simplified redirect flow is:
+
+```text
+Client
+   │
+   ▼
+ASP.NET Core API
+   │
+   ▼
+Redis cache
+   │
+   ├── Cache hit ──────────────┐
+   │                          │
+   └── Cache miss → PostgreSQL│
+                              │
+                              ▼
+                     Original destination
+                              │
+                              ▼
+                    Publish UrlClickedEvent
+                              │
+                              ▼
+                          Kafka
+                              │
+                              ▼
+                   ClickEventConsumer
+                              │
+                              ▼
+                    ClickEventProcessor
+                              │
+                              ▼
+                         PostgreSQL
+                     (ClickCount + 1)
+```
+
+The redirect request does not wait for PostgreSQL to persist the click count. Click tracking is performed asynchronously through Kafka.
+
+The Kafka event contains:
+
+```text
+EventId
+ShortCode
+OccurredAt
+```
+
+The consumer uses manual Kafka offset commits together with database-backed event idempotency to prevent duplicate delivery from incrementing the click count more than once.
+
+### Kafka Delivery Model
+
+The API waits for Kafka to acknowledge the click event before returning the redirect response.
+
+This currently provides stronger event-delivery guarantees than fire-and-forget publishing, but also means Kafka availability can affect redirect availability.
+
+A future resilience improvement is to investigate patterns such as retry policies, circuit breakers, and the transactional outbox pattern.
 
 ## Setup
 
@@ -62,13 +123,25 @@ This file should remain local and must not be committed to source control.
 
 ### Run the Infrastructure
 
-Start PostgreSQL and Redis using Docker Compose:
+Start PostgreSQL, Redis, and Kafka using Docker Compose:
 
 ```bash
 docker compose --env-file .env.local up -d
 ```
 
-PostgreSQL is exposed locally on port `5433`, while Redis is available on port `6379`.
+The local infrastructure exposes:
+
+```text
+PostgreSQL → localhost:5433
+Redis      → localhost:6379
+Kafka      → localhost:9093
+```
+
+Inside the Docker Compose network, application containers communicate with Kafka using:
+
+```text
+kafka:9092
+```
 
 ### Configure the API for Local Development
 
@@ -88,11 +161,39 @@ The local API connects to Redis using:
 localhost:6379
 ```
 
+For local Kafka development, the API uses:
+
+```text
+localhost:9093
+```
+
 ### Apply Database Migrations
 
 ```bash
 dotnet ef database update
 ```
+
+### Create the Kafka Topic
+
+The click event topic is:
+
+```text
+url-clicked
+```
+
+Create it using:
+
+```bash
+docker exec urlshortener-kafka \
+  /opt/kafka/bin/kafka-topics.sh \
+  --create \
+  --topic url-clicked \
+  --bootstrap-server localhost:9092 \
+  --partitions 1 \
+  --replication-factor 1
+```
+
+The topic only needs to be created once unless the Kafka data volume is recreated.
 
 ### Run the API Locally
 
@@ -110,7 +211,7 @@ From the repository root:
 dotnet test
 ```
 
-The test suite includes unit tests and integration tests using a real PostgreSQL database through Testcontainers.
+The test suite includes unit tests, database integration tests, concurrency tests, and Kafka integration tests.
 
 ## API
 
@@ -220,21 +321,50 @@ If a Redis write fails after successfully retrieving the URL from PostgreSQL, th
 
 This prevents a Redis outage from unnecessarily making the URL redirection functionality unavailable.
 
+### Asynchronous Click Tracking
+
+Click counts are no longer updated synchronously as part of the redirect request.
+
+When a valid short code is redirected, the API publishes a `UrlClickedEvent` to Kafka.
+
+The consumer then processes the event asynchronously and increments the corresponding PostgreSQL click count.
+
+This removes the PostgreSQL write from the latency-sensitive redirect path.
+
+### Click Event Idempotency
+
+Kafka consumers typically need to account for the possibility of duplicate message delivery.
+
+The application assigns every click event a unique `EventId`.
+
+Before processing a click event, the consumer checks the `ProcessedClickEvents` table.
+
+If the event has already been processed, it is skipped.
+
+Otherwise:
+
+```text
+1. Increment ClickCount atomically
+2. Record EventId in ProcessedClickEvents
+3. Commit the database transaction
+4. Commit the Kafka offset
+```
+
+The database transaction ensures that the click update and event-recording operation succeed together.
+
+This prevents the same Kafka event from incrementing the click count more than once.
+
 ### Click Count Concurrency
 
-Click counts are updated atomically at the database level using PostgreSQL's incremental update semantics.
-
-The service performs:
+The click count itself is updated atomically at the database level:
 
 ```text
 ClickCount = ClickCount + 1
 ```
 
-within the database rather than relying on a read-modify-write sequence in application memory.
+This avoids lost updates when multiple events attempt to increment the same URL concurrently.
 
-This avoids lost updates when multiple requests increment the same URL concurrently.
-
-Concurrency tests verify that simultaneous redirect requests produce the expected final click count.
+Atomic database updates are now performed by the asynchronous click-event processor rather than directly on the redirect request path.
 
 ### Rate Limiting
 
@@ -264,12 +394,16 @@ Logs are generated for important application events, including:
 - Short URL creation
 - Redis cache hits and misses
 - URL redirects
+- Kafka click-event publication
+- Kafka consumer startup and shutdown
+- Kafka processing failures
 - Unknown short codes
 - Short-code collisions
 - Redis read failures
 - Redis write failures
+- Duplicate click events
 
-Structured logging is used so operational properties such as `ShortCode` and retry attempts can be captured as structured fields rather than embedded directly into log messages.
+Structured logging is used so operational properties such as `ShortCode`, `EventId`, Kafka partition, Kafka offset, and retry attempts can be captured as structured fields rather than embedded directly into log messages.
 
 Sensitive information, including credentials and unnecessary request data, is not logged.
 
@@ -283,7 +417,7 @@ The build stage uses the .NET SDK image to restore, build, and publish the appli
 
 The runtime stage uses Microsoft's **.NET 10 Ubuntu Chiseled** ASP.NET runtime image, providing a minimal runtime environment with a reduced attack surface compared with a full Linux runtime image.
 
-The complete development stack can be started using Docker Compose:
+The development stack can be started using Docker Compose:
 
 ```bash
 docker compose --env-file .env.local up --build
@@ -294,6 +428,7 @@ This runs:
 - ASP.NET Core API
 - PostgreSQL
 - Redis
+- Kafka
 
 The API is exposed on:
 
@@ -305,6 +440,13 @@ The health endpoint can be checked with:
 
 ```bash
 curl http://localhost:8080/healthz
+```
+
+Kafka uses separate listeners for host and container communication:
+
+```text
+Docker containers → kafka:9092
+Host applications  → localhost:9093
 ```
 
 ## CI/CD
@@ -327,24 +469,26 @@ AWS application deployment is not currently part of the CI/CD pipeline.
 
 ## Tech Stack
 
-| Technology            | Purpose                             |
-| --------------------- | ----------------------------------- |
-| C# / .NET 10          | Backend development                 |
-| ASP.NET Core          | REST API                            |
-| Entity Framework Core | Data access                         |
-| PostgreSQL            | Primary database                    |
-| Redis                 | Distributed caching                 |
-| xUnit                 | Unit and integration testing        |
-| Moq                   | Dependency mocking                  |
-| Testcontainers        | Database integration testing        |
-| Docker                | Containerisation                    |
-| Docker Compose        | Local service orchestration         |
-| k6                    | Load and performance testing        |
-| Trivy                 | Container vulnerability scanning    |
-| GitHub Actions        | CI/CD automation                    |
-| AWS ECR               | Container image registry            |
-| Kubernetes            | Container orchestration _(planned)_ |
-| AWS                   | Cloud infrastructure and deployment |
+| Technology            | Purpose                                           |
+| --------------------- | ------------------------------------------------- |
+| C# / .NET 10          | Backend development                               |
+| ASP.NET Core          | REST API                                          |
+| Entity Framework Core | Data access                                       |
+| PostgreSQL            | Primary database                                  |
+| Redis                 | Distributed caching                               |
+| Apache Kafka          | Event streaming and asynchronous click processing |
+| Confluent.Kafka       | .NET Kafka client                                 |
+| xUnit                 | Unit and integration testing                      |
+| Moq                   | Dependency mocking                                |
+| Testcontainers        | Database integration testing                      |
+| Docker                | Containerisation                                  |
+| Docker Compose        | Local service orchestration                       |
+| k6                    | Load and performance testing                      |
+| Trivy                 | Container vulnerability scanning                  |
+| GitHub Actions        | CI/CD automation                                  |
+| AWS ECR               | Container image registry                          |
+| Kubernetes            | Container orchestration _(planned)_               |
+| AWS                   | Cloud infrastructure and deployment               |
 
 ## Testing
 
@@ -352,8 +496,9 @@ The project uses multiple levels of automated testing:
 
 - **Unit tests** for service and controller behaviour.
 - **Integration tests** for API behaviour and database persistence.
+- **Kafka integration tests** for event publication and consumer processing.
 - **Testcontainers** to run PostgreSQL during integration tests.
-- **Moq** to isolate Redis dependencies in unit tests.
+- **Moq** to isolate Redis and Kafka producer dependencies where appropriate.
 - **Concurrency tests** to validate correct behaviour under simultaneous requests.
 
 The test suite verifies functionality including:
@@ -373,8 +518,11 @@ The test suite verifies functionality including:
 - Database-level collision handling
 - URL redirection
 - HTTP 302 responses
+- Click-event publication
 - Click-count tracking
 - Concurrent click-count updates
+- Kafka consumer processing
+- Kafka event idempotency
 - Non-existent short codes
 - Redis cache behaviour
 - Redis read failure fallback to PostgreSQL
@@ -385,6 +533,18 @@ The test suite verifies functionality including:
 - Rate limiting for redirects
 - `429 Too Many Requests` responses
 - End-to-end API behaviour
+
+Kafka consumer integration tests verify the real message path:
+
+```text
+Kafka
+  ↓
+ClickEventConsumer
+  ↓
+ClickEventProcessor
+  ↓
+PostgreSQL
+```
 
 Run the complete test suite with:
 
@@ -400,11 +560,30 @@ Load-test scripts, benchmark results, and instructions for running the performan
 
 Initial benchmarking identified synchronous click-count persistence as a key performance bottleneck under concurrent load.
 
+After moving click-count persistence to asynchronous Kafka processing, the redirect benchmark improved substantially under the same test configuration.
+
+The recorded benchmark comparison is:
+
+| Metric          | Before Kafka |  After Kafka |
+| --------------- | -----------: | -----------: |
+| Throughput      |   ~207 req/s | ~2,173 req/s |
+| Average latency |    120.50 ms |     11.38 ms |
+| p95 latency     |    330.09 ms |     14.06 ms |
+| Error rate      |           0% |           0% |
+
+This represents approximately:
+
+- **10.5× higher throughput**
+- **10.6× lower average latency**
+- **23.5× lower p95 latency**
+
+The benchmark measures the application path as a whole, including Kafka event publication, so the improvement represents the effect of the architectural change rather than Kafka alone.
+
 ## Project Status
 
 🚧 **In development**
 
-The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, concurrency handling, performance benchmarking, and AWS container registry integration.
+The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, concurrency handling, Kafka-based asynchronous processing, performance benchmarking, and AWS container registry integration.
 
 ### Completed
 
@@ -417,6 +596,7 @@ The initial API and database foundation have been implemented alongside a servic
 - Service layer
 - Unit testing
 - Integration testing
+- Kafka integration testing
 - Concurrency testing
 - Request validation
 - HTTP/HTTPS URL scheme validation
@@ -436,17 +616,26 @@ The initial API and database foundation have been implemented alongside a servic
 - Structured application logging
 - Structured logging for important URL lifecycle events and Redis failures
 - Logging tests for Redis failure scenarios
+- Kafka event publishing
+- Kafka consumer
+- Asynchronous click-count persistence
 - Atomic click-count updates
+- Kafka event idempotency
+- Database-backed processed-event tracking
 - Concurrent click-count correctness testing
+- Kafka consumer integration testing
 - k6 load-testing infrastructure
 - Initial performance benchmarking
 - Performance bottleneck identification
+- Post-Kafka performance benchmarking
 - Dockerised PostgreSQL
 - Dockerised Redis
+- Dockerised Kafka
 - Dockerised ASP.NET Core API
 - Multi-stage Docker build
 - Minimal/chiseled .NET runtime image
 - Docker Compose infrastructure
+- Host and container Kafka listener configuration
 - Health checks
 - Swagger/OpenAPI
 - GitHub Actions CI pipeline
@@ -459,8 +648,12 @@ The initial API and database foundation have been implemented alongside a servic
 
 ### Planned
 
-- Decoupled/asynchronous click-count persistence
-- Metrics, dashboards, and distributed tracing
+- Kafka failure handling and resilience
+- Retry and backoff policies
+- Circuit-breaker patterns
+- Transactional outbox investigation
+- Metrics and dashboards
+- Distributed tracing
 - Higher-concurrency load testing
 - Performance optimisation
 - Security hardening
@@ -470,6 +663,6 @@ The initial API and database foundation have been implemented alongside a servic
 - Managed Redis deployment
 - Kubernetes deployment
 - Distributed system scalability
-- Resilience and fault-tolerance patterns
+- Resilience and fault-tolerance testing
 
-The project will progressively evolve towards a **distributed, scalable, observable, and production-oriented backend system**.
+The project will progressively evolve towards a **distributed, scalable, observable, resilient, and production-oriented backend system**.
