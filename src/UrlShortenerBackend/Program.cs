@@ -5,13 +5,46 @@ using StackExchange.Redis;
 using System.Threading.RateLimiting;
 using Confluent.Kafka;
 using UrlShortenerBackend.Api.Kafka;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using UrlShortenerBackend.Api.Observability;
+using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 
-Console.WriteLine(
-    $"Connection string: {builder.Configuration.GetConnectionString("DefaultConnection")}");
-
 // Add services to the container.
+
+builder.Services
+    .AddOpenTelemetry()
+    .ConfigureResource(resource =>
+        resource.AddService(
+            serviceName: "UrlShortenerBackend",
+            serviceVersion: "1.0.0"))
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddAspNetCoreInstrumentation()
+            .AddRuntimeInstrumentation()
+            .AddProcessInstrumentation()
+            .AddMeter(UrlShortenerMetrics.MeterName)
+            .AddPrometheusExporter();
+    })
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddAspNetCoreInstrumentation()
+            .AddRedisInstrumentation()
+            .AddSource(UrlShortenerActivitySource.Name)
+            .AddOtlpExporter(options =>
+            {
+                var endpoint =
+                    builder.Configuration["OpenTelemetry:Endpoint"]
+                    ?? "http://localhost:4318";
+
+                options.Endpoint = new Uri(endpoint);
+            });
+    });
+
 builder.Services.AddOpenApi();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -79,11 +112,15 @@ builder.Services.AddSingleton<IProducer<string, string>>(
             .Build();
     });
 
+
+
 builder.Services.AddScoped<IClickEventProducer, ClickEventProducer>();
 
 var app = builder.Build();
 
 app.MapHealthChecks("/healthz");
+
+app.MapPrometheusScrapingEndpoint();
 
 app.UseExceptionHandler();
 

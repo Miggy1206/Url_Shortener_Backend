@@ -4,7 +4,7 @@ A distributed URL shortening service built with **C# and .NET 10**.
 
 The project is designed as a practical exploration of modern backend and distributed systems engineering, progressing from a simple API into a scalable, production-oriented service.
 
-The focus is on understanding how distributed services are designed, tested, containerised, deployed, and scaled, while exploring technologies such as PostgreSQL, Redis, Kafka, Docker, AWS, and Kubernetes.
+The focus is on understanding how distributed services are designed, tested, containerised, deployed, and scaled, while exploring technologies such as PostgreSQL, Redis, Kafka, Docker, AWS, Kubernetes, and OpenTelemetry.
 
 ## Table of Contents
 
@@ -16,6 +16,7 @@ The focus is on understanding how distributed services are designed, tested, con
 - [CI/CD](#cicd)
 - [Tech Stack](#tech-stack)
 - [Testing](#testing)
+- [Observability](#observability)
 - [Load Testing](#load-testing)
 - [Project Status](#project-status)
 
@@ -31,7 +32,8 @@ The main objectives of this project are to:
 - Apply automated **unit and integration testing** throughout development.
 - Learn containerisation and service orchestration using **Docker and Kubernetes**.
 - Explore **AWS** and cloud-based infrastructure.
-- Understand concepts such as **load balancing, service communication, caching, concurrency, observability, messaging, and resilience**.
+- Implement **observability** using metrics, tracing, dashboards, and structured logging.
+- Understand concepts such as **load balancing, service communication, caching, concurrency, messaging, observability, and resilience**.
 - Apply software engineering principles around **architecture, maintainability, scalability, security, and performance**.
 
 ## Architecture
@@ -42,35 +44,35 @@ A simplified redirect flow is:
 
 ```text
 Client
-   │
-   ▼
+   |
+   v
 ASP.NET Core API
-   │
-   ▼
+   |
+   v
 Redis cache
-   │
-   ├── Cache hit ──────────────┐
-   │                          │
-   └── Cache miss → PostgreSQL│
-                              │
-                              ▼
-                     Original destination
-                              │
-                              ▼
-                    Publish UrlClickedEvent
-                              │
-                              ▼
-                          Kafka
-                              │
-                              ▼
-                   ClickEventConsumer
-                              │
-                              ▼
-                    ClickEventProcessor
-                              │
-                              ▼
-                         PostgreSQL
-                     (ClickCount + 1)
+   |
+   +-- Cache hit -------------------+
+   |                                |
+   +-- Cache miss -> PostgreSQL     |
+                                    |
+                                    v
+                           Original destination
+                                    |
+                                    v
+                          Publish UrlClickedEvent
+                                    |
+                                    v
+                                  Kafka
+                                    |
+                                    v
+                           ClickEventConsumer
+                                    |
+                                    v
+                           ClickEventProcessor
+                                    |
+                                    v
+                                PostgreSQL
+                              (ClickCount + 1)
 ```
 
 The redirect request does not wait for PostgreSQL to persist the click count. Click tracking is performed asynchronously through Kafka.
@@ -91,7 +93,7 @@ The API waits for Kafka to acknowledge the click event before returning the redi
 
 This currently provides stronger event-delivery guarantees than fire-and-forget publishing, but also means Kafka availability can affect redirect availability.
 
-A future resilience improvement is to investigate patterns such as retry policies, circuit breakers, and the transactional outbox pattern.
+Future resilience work will investigate patterns such as retry policies, circuit breakers, and the transactional outbox pattern.
 
 ## Setup
 
@@ -123,7 +125,7 @@ This file should remain local and must not be committed to source control.
 
 ### Run the Infrastructure
 
-Start PostgreSQL, Redis, and Kafka using Docker Compose:
+Start PostgreSQL, Redis, Kafka, the OpenTelemetry Collector, Jaeger, Prometheus, and Grafana using Docker Compose:
 
 ```bash
 docker compose --env-file .env.local up -d
@@ -135,12 +137,21 @@ The local infrastructure exposes:
 PostgreSQL → localhost:5433
 Redis      → localhost:6379
 Kafka      → localhost:9093
+Prometheus → localhost:9090
+Grafana    → localhost:3100
+Jaeger     → localhost:16686
 ```
 
 Inside the Docker Compose network, application containers communicate with Kafka using:
 
 ```text
 kafka:9092
+```
+
+The API sends OpenTelemetry trace data to the collector using:
+
+```text
+http://otel-collector:4317
 ```
 
 ### Configure the API for Local Development
@@ -166,6 +177,8 @@ For local Kafka development, the API uses:
 ```text
 localhost:9093
 ```
+
+For local OpenTelemetry development, the API can send traces to the local OpenTelemetry Collector endpoint.
 
 ### Apply Database Migrations
 
@@ -333,7 +346,7 @@ This removes the PostgreSQL write from the latency-sensitive redirect path.
 
 ### Click Event Idempotency
 
-Kafka consumers typically need to account for the possibility of duplicate message delivery.
+Kafka consumers need to account for the possibility of duplicate message delivery.
 
 The application assigns every click event a unique `EventId`.
 
@@ -407,7 +420,7 @@ Structured logging is used so operational properties such as `ShortCode`, `Event
 
 Sensitive information, including credentials and unnecessary request data, is not logged.
 
-The logging implementation is designed to integrate with cloud-based observability platforms such as AWS CloudWatch when the application is deployed to AWS.
+The logging implementation is designed to integrate with cloud-based observability platforms when the application is deployed to AWS.
 
 ## Docker
 
@@ -429,6 +442,10 @@ This runs:
 - PostgreSQL
 - Redis
 - Kafka
+- OpenTelemetry Collector
+- Jaeger
+- Prometheus
+- Grafana
 
 The API is exposed on:
 
@@ -469,26 +486,31 @@ AWS application deployment is not currently part of the CI/CD pipeline.
 
 ## Tech Stack
 
-| Technology            | Purpose                                           |
-| --------------------- | ------------------------------------------------- |
-| C# / .NET 10          | Backend development                               |
-| ASP.NET Core          | REST API                                          |
-| Entity Framework Core | Data access                                       |
-| PostgreSQL            | Primary database                                  |
-| Redis                 | Distributed caching                               |
-| Apache Kafka          | Event streaming and asynchronous click processing |
-| Confluent.Kafka       | .NET Kafka client                                 |
-| xUnit                 | Unit and integration testing                      |
-| Moq                   | Dependency mocking                                |
-| Testcontainers        | Database integration testing                      |
-| Docker                | Containerisation                                  |
-| Docker Compose        | Local service orchestration                       |
-| k6                    | Load and performance testing                      |
-| Trivy                 | Container vulnerability scanning                  |
-| GitHub Actions        | CI/CD automation                                  |
-| AWS ECR               | Container image registry                          |
-| Kubernetes            | Container orchestration _(planned)_               |
-| AWS                   | Cloud infrastructure and deployment               |
+| Technology              | Purpose                                           |
+| ----------------------- | ------------------------------------------------- |
+| C# / .NET 10            | Backend development                               |
+| ASP.NET Core            | REST API                                          |
+| Entity Framework Core   | Data access                                       |
+| PostgreSQL              | Primary database                                  |
+| Redis                   | Distributed caching                               |
+| Apache Kafka            | Event streaming and asynchronous click processing |
+| Confluent.Kafka         | .NET Kafka client                                 |
+| OpenTelemetry           | Metrics and distributed tracing                   |
+| Prometheus              | Metrics collection and querying                   |
+| Grafana                 | Metrics dashboards                                |
+| OpenTelemetry Collector | Telemetry collection and trace forwarding         |
+| Jaeger                  | Distributed trace visualisation                   |
+| xUnit                   | Unit and integration testing                      |
+| Moq                     | Dependency mocking                                |
+| Testcontainers          | Database integration testing                      |
+| Docker                  | Containerisation                                  |
+| Docker Compose          | Local service orchestration                       |
+| k6                      | Load and performance testing                      |
+| Trivy                   | Container vulnerability scanning                  |
+| GitHub Actions          | CI/CD automation                                  |
+| AWS ECR                 | Container image registry                          |
+| Kubernetes              | Container orchestration _(planned)_               |
+| AWS                     | Cloud infrastructure and deployment               |
 
 ## Testing
 
@@ -538,11 +560,14 @@ Kafka consumer integration tests verify the real message path:
 
 ```text
 Kafka
-  ↓
+  |
+  v
 ClickEventConsumer
-  ↓
+  |
+  v
 ClickEventProcessor
-  ↓
+  |
+  v
 PostgreSQL
 ```
 
@@ -551,6 +576,120 @@ Run the complete test suite with:
 ```bash
 dotnet test
 ```
+
+## Observability
+
+The application uses OpenTelemetry to provide metrics and distributed tracing.
+
+The local observability stack consists of:
+
+```text
+Application
+    |
+    +-- Metrics --> Prometheus --> Grafana
+    |
+    +-- Traces --> OpenTelemetry Collector --> Jaeger
+```
+
+### Metrics
+
+The API exposes Prometheus-compatible metrics through:
+
+```text
+http://localhost:8080/metrics
+```
+
+Built-in metrics include:
+
+- ASP.NET Core HTTP request metrics
+- .NET runtime metrics
+- .NET process metrics
+
+Custom application metrics include:
+
+```text
+urlshortener_click_events_published_total
+urlshortener_click_events_processed_total
+urlshortener_click_events_duplicates_total
+urlshortener_click_events_publish_failures_total
+urlshortener_kafka_publish_duration_milliseconds
+urlshortener_click_events_processing_duration_milliseconds
+```
+
+These metrics provide visibility into the Kafka click-processing pipeline, including throughput, failures, duplicate events, and latency.
+
+### Grafana
+
+Grafana is available at:
+
+```text
+http://localhost:3100
+```
+
+The dashboard provides visibility into:
+
+- Click events published
+- Click events processed
+- Duplicate click events
+- Kafka publish failures
+- Kafka publish throughput
+- Click processing throughput
+- Kafka publish latency
+- Click processing latency
+- HTTP application metrics
+
+### Prometheus
+
+Prometheus is available at:
+
+```text
+http://localhost:9090
+```
+
+The API is scraped through the Docker Compose network using:
+
+```text
+api:8080/metrics
+```
+
+The current scrape interval is 5 seconds.
+
+### Distributed Tracing
+
+The application creates custom spans for Kafka publishing and click-event processing.
+
+Trace context is propagated through Kafka message headers so the producer and consumer spans can be associated with the same distributed trace.
+
+The tracing flow is:
+
+```text
+HTTP request
+    |
+    +-- Redis operation
+    |
+    +-- kafka.publish
+            |
+            v
+        Kafka topic
+            |
+            v
+    click_event.process
+            |
+            v
+       PostgreSQL
+```
+
+Jaeger is available at:
+
+```text
+http://localhost:16686
+```
+
+### Observability Documentation
+
+Detailed setup instructions, metric definitions, PromQL examples, tracing information, and troubleshooting guidance are available in:
+
+[`src/UrlShortenerBackend/Observability/README.md`](src/UrlShortenerBackend/Observability/README.md)
 
 ## Load Testing
 
@@ -583,7 +722,7 @@ The benchmark measures the application path as a whole, including Kafka event pu
 
 🚧 **In development**
 
-The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, concurrency handling, Kafka-based asynchronous processing, performance benchmarking, and AWS container registry integration.
+The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, concurrency handling, Kafka-based asynchronous processing, observability, performance benchmarking, and AWS container registry integration.
 
 ### Completed
 
@@ -628,10 +767,19 @@ The initial API and database foundation have been implemented alongside a servic
 - Initial performance benchmarking
 - Performance bottleneck identification
 - Post-Kafka performance benchmarking
+- OpenTelemetry metrics
+- OpenTelemetry distributed tracing
+- Custom Kafka application metrics
+- Prometheus metrics collection
+- Grafana dashboards
+- OpenTelemetry Collector
+- Jaeger distributed tracing
+- Kafka trace-context propagation
 - Dockerised PostgreSQL
 - Dockerised Redis
 - Dockerised Kafka
 - Dockerised ASP.NET Core API
+- Dockerised observability stack
 - Multi-stage Docker build
 - Minimal/chiseled .NET runtime image
 - Docker Compose infrastructure
@@ -652,8 +800,11 @@ The initial API and database foundation have been implemented alongside a servic
 - Retry and backoff policies
 - Circuit-breaker patterns
 - Transactional outbox investigation
-- Metrics and dashboards
-- Distributed tracing
+- PostgreSQL tracing instrumentation
+- Liveness and readiness endpoints
+- Kafka consumer lag monitoring
+- Alerting
+- Grafana dashboard provisioning
 - Higher-concurrency load testing
 - Performance optimisation
 - Security hardening

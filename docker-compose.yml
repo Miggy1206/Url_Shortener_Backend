@@ -13,6 +13,7 @@ services:
       Kafka__BootstrapServers: "kafka:9092"
       Kafka__ClickTopic: "url-clicked"
       Kafka__ConsumerGroup: "click-count-consumer"
+      OpenTelemetry__Endpoint: "http://otel-collector:4317"
     depends_on:
       - postgres
       - redis
@@ -66,6 +67,41 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
     volumes:
       - kafka_data:/var/lib/kafka/data
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: urlshortener-otel-collector
+    restart: unless-stopped
+    command:
+      - "--config=/etc/otelcol-contrib/config.yaml"
+    volumes:
+      - ./src/UrlShortenerBackend/Observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: urlshortener-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: urlshortener-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./src/UrlShortenerBackend/Observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    container_name: urlshortener-grafana
+    restart: unless-stopped
+    ports:
+      - "3100:3000"
+    depends_on:
+      - prometheus
+      - jaeger
 
 volumes:
   postgres_data:
