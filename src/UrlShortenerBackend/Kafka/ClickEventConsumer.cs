@@ -1,6 +1,10 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Confluent.Kafka;
+using OpenTelemetry.Context.Propagation;
 using UrlShortenerBackend.Api.Kafka.Events;
+using UrlShortenerBackend.Api.Observability;
 
 namespace UrlShortenerBackend.Api.Kafka;
 
@@ -38,7 +42,7 @@ public class ClickEventConsumer(
         using var consumer =
             new ConsumerBuilder<string, string>(
                 consumerConfig)
-            .Build();
+                .Build();
 
         consumer.Subscribe(_topic);
 
@@ -55,6 +59,24 @@ public class ClickEventConsumer(
                     var result = consumer.Consume(
                         stoppingToken);
 
+                    var parentContext =
+                        Propagators.DefaultTextMapPropagator.Extract(
+                            default,
+                            result.Message.Headers,
+                            static (headers, key) =>
+                            {
+                                var header = headers?
+                                    .FirstOrDefault(x => x.Key == key);
+
+                                return header is null
+                                    ? Enumerable.Empty<string>()
+                                    : new[]
+                                    {
+                                        Encoding.UTF8.GetString(
+                                            header.GetValueBytes())
+                                    };
+                            });
+
                     var clickEvent =
                         JsonSerializer.Deserialize<UrlClickedEvent>(
                             result.Message.Value);
@@ -70,6 +92,36 @@ public class ClickEventConsumer(
                         continue;
                     }
 
+                    using var activity =
+                        UrlShortenerActivitySource.Source.StartActivity(
+                            "click_event.process",
+                            ActivityKind.Consumer,
+                            parentContext.ActivityContext);
+
+                    activity?.SetTag(
+                        "messaging.system",
+                        "kafka");
+
+                    activity?.SetTag(
+                        "messaging.destination.name",
+                        _topic);
+
+                    activity?.SetTag(
+                        "urlshortener.event_id",
+                        clickEvent.EventId);
+
+                    activity?.SetTag(
+                        "urlshortener.short_code",
+                        clickEvent.ShortCode);
+
+                    activity?.SetTag(
+                        "messaging.kafka.partition",
+                        result.Partition.Value);
+
+                    activity?.SetTag(
+                        "messaging.kafka.offset",
+                        result.Offset.Value);
+
                     await using var scope =
                         scopeFactory.CreateAsyncScope();
 
@@ -80,6 +132,9 @@ public class ClickEventConsumer(
                     await eventProcessor.ProcessAsync(
                         clickEvent,
                         stoppingToken);
+
+                    activity?.SetStatus(
+                        ActivityStatusCode.Ok);
 
                     consumer.Commit(result);
 
