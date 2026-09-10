@@ -9,6 +9,8 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using UrlShortenerBackend.Api.Observability;
 using OpenTelemetry.Trace;
+using Polly;
+using Polly.CircuitBreaker;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -104,7 +106,9 @@ builder.Services.AddSingleton<IProducer<string, string>>(
 
         var producerConfig = new ProducerConfig
         {
-            BootstrapServers = bootstrapServers
+            BootstrapServers = bootstrapServers,
+            MessageTimeoutMs = 1000,
+            RequestTimeoutMs = 500
         };
 
         return new ProducerBuilder<string, string>(
@@ -115,6 +119,41 @@ builder.Services.AddSingleton<IProducer<string, string>>(
 
 
 builder.Services.AddScoped<IClickEventProducer, ClickEventProducer>();
+
+builder.Services.AddResiliencePipeline(
+    "kafka-publish",
+    pipeline =>
+    {
+        pipeline.AddCircuitBreaker(
+            new CircuitBreakerStrategyOptions
+            {
+                FailureRatio = 0.5,
+                SamplingDuration = TimeSpan.FromSeconds(30),
+                MinimumThroughput = 2,
+                BreakDuration = TimeSpan.FromSeconds(30),
+
+                OnOpened = args =>
+                {
+                    UrlShortenerMetrics.KafkaCircuitOpened.Add(1);
+
+                    return default;
+                },
+
+                OnClosed = args =>
+                {
+                    UrlShortenerMetrics.KafkaCircuitClosed.Add(1);
+
+                    return default;
+                },
+
+                OnHalfOpened = args =>
+                {
+                    UrlShortenerMetrics.KafkaCircuitHalfOpened.Add(1);
+
+                    return default;
+                }
+            });
+    });
 
 var app = builder.Build();
 

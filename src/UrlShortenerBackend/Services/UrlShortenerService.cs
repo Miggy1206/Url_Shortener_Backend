@@ -55,6 +55,7 @@ public class UrlShortenerService(
                     "Short-code collision detected for {ShortCode} on attempt {Attempt}",
                     shortCode,
                     attempt + 1);
+
                 context.Entry(url).State = EntityState.Detached;
             }
         }
@@ -69,15 +70,12 @@ public class UrlShortenerService(
 
         try
         {
-            var cachedOriginalUrl = await _cache.StringGetAsync(cacheKey);
+            var cachedOriginalUrl =
+                await _cache.StringGetAsync(cacheKey);
 
             if (cachedOriginalUrl.HasValue)
             {
-                await clickEventProducer.PublishAsync(
-                    new UrlClickedEvent(
-                        EventId: Guid.NewGuid(),
-                        ShortCode: shortCode,
-                        OccurredAt: DateTime.UtcNow));
+                await PublishClickEventAsync(shortCode);
 
                 logger.LogDebug(
                     "Redis cache hit for short code {ShortCode}",
@@ -110,12 +108,7 @@ public class UrlShortenerService(
             return null;
         }
 
-
-        await clickEventProducer.PublishAsync(
-            new UrlClickedEvent(
-                EventId: Guid.NewGuid(),
-                ShortCode: shortCode,
-                OccurredAt: DateTime.UtcNow));
+        await PublishClickEventAsync(shortCode);
 
         try
         {
@@ -138,7 +131,8 @@ public class UrlShortenerService(
         return url.OriginalUrl;
     }
 
-    public async Task<string?> GetOriginalUrlBenchmarkAsync(string shortCode)
+    public async Task<string?> GetOriginalUrlBenchmarkAsync(
+        string shortCode)
     {
         return await context.Urls
             .Where(x => x.ShortCode == shortCode)
@@ -146,7 +140,8 @@ public class UrlShortenerService(
             .SingleOrDefaultAsync();
     }
 
-    public async Task IncrementClickCountBenchmarkAsync(string shortCode)
+    public async Task IncrementClickCountBenchmarkAsync(
+        string shortCode)
     {
         await context.Urls
             .Where(x => x.ShortCode == shortCode)
@@ -154,5 +149,30 @@ public class UrlShortenerService(
                 setters.SetProperty(
                     x => x.ClickCount,
                     x => x.ClickCount + 1));
+    }
+
+    private async Task PublishClickEventAsync(
+        string shortCode,
+        CancellationToken cancellationToken = default)
+    {
+        var clickEvent = new UrlClickedEvent(
+            EventId: Guid.NewGuid(),
+            ShortCode: shortCode,
+            OccurredAt: DateTime.UtcNow);
+
+        try
+        {
+            await clickEventProducer.PublishAsync(
+                clickEvent,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to publish click event {EventId} for short code {ShortCode}. Continuing with redirect.",
+                clickEvent.EventId,
+                clickEvent.ShortCode);
+        }
     }
 }
