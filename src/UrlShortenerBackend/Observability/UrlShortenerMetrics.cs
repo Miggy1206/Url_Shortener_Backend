@@ -40,4 +40,24 @@ public static class UrlShortenerMetrics
             "urlshortener.click_events.processing.duration",
             unit: "ms",
             description: "Duration of click-event processing.");
+    
+    public static readonly Counter<long> ClickEventPublishRetries =
+        Meter.CreateCounter<long>(
+            "urlshortener.click_events.publish_retries",
+            description: "Number of click event publish retry attempts.");
+    
+    public static readonly Counter<long> KafkaCircuitOpened =
+        Meter.CreateCounter<long>(
+            "urlshortener.kafka.circuit.opened",
+            description: "Number of times the Kafka circuit breaker opened.");
+
+    public static readonly Counter<long> KafkaCircuitClosed =
+        Meter.CreateCounter<long>(
+            "urlshortener.kafka.circuit.closed",
+            description: "Number of times the Kafka circuit breaker closed.");
+
+    public static readonly Counter<long> KafkaCircuitHalfOpened =
+        Meter.CreateCounter<long>(
+            "urlshortener.kafka.circuit.half_opened",
+            description: "Number of times the Kafka circuit breaker entered half-open state.");
 }

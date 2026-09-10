@@ -9,6 +9,7 @@ using UrlShortenerBackend.Tests.Integration;
 
 namespace UrlShortenerBackend.Tests.Kafka;
 
+[Collection("Kafka tests")]
 public class ClickEventProcessorTests : IClassFixture<PostgresFixture>
 {
     private readonly PostgresFixture _postgres;

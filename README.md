@@ -2,9 +2,11 @@
 
 A distributed URL shortening service built with **C# and .NET 10**.
 
-The project is designed as a practical exploration of modern backend and distributed systems engineering, progressing from a simple API into a scalable, production-oriented service.
+The project is designed as a practical exploration of modern backend and distributed systems engineering, progressing from a simple API into a scalable, observable, resilient, production-oriented service.
 
-The focus is on understanding how distributed services are designed, tested, containerised, deployed, and scaled, while exploring technologies such as PostgreSQL, Redis, Kafka, Docker, AWS, Kubernetes, and OpenTelemetry.
+The focus is on understanding how distributed services are designed, tested, containerised, deployed, monitored, and scaled, while exploring technologies such as PostgreSQL, Redis, Kafka, Docker, AWS, Kubernetes, and OpenTelemetry.
+
+---
 
 ## Table of Contents
 
@@ -20,12 +22,14 @@ The focus is on understanding how distributed services are designed, tested, con
 - [Load Testing](#load-testing)
 - [Project Status](#project-status)
 
+---
+
 ## Objectives
 
 The main objectives of this project are to:
 
 - Build a robust REST API using **ASP.NET Core and .NET 10**.
-- Explore **distributed systems architecture**, scalability, availability, and fault tolerance.
+- Explore **distributed systems architecture**, scalability, availability, resilience, and fault tolerance.
 - Develop practical experience with **PostgreSQL and Entity Framework Core**.
 - Use **Redis** for distributed caching and performance optimisation.
 - Use **Apache Kafka** for asynchronous event processing and event-driven architecture.
@@ -33,8 +37,10 @@ The main objectives of this project are to:
 - Learn containerisation and service orchestration using **Docker and Kubernetes**.
 - Explore **AWS** and cloud-based infrastructure.
 - Implement **observability** using metrics, tracing, dashboards, and structured logging.
-- Understand concepts such as **load balancing, service communication, caching, concurrency, messaging, observability, and resilience**.
+- Understand concepts such as **load balancing, service communication, caching, concurrency, messaging, observability, resilience, retries, circuit breakers, and fault isolation**.
 - Apply software engineering principles around **architecture, maintainability, scalability, security, and performance**.
+
+---
 
 ## Architecture
 
@@ -51,31 +57,41 @@ ASP.NET Core API
    v
 Redis cache
    |
-   +-- Cache hit -------------------+
-   |                                |
-   +-- Cache miss -> PostgreSQL     |
-                                    |
-                                    v
-                           Original destination
-                                    |
-                                    v
-                          Publish UrlClickedEvent
-                                    |
-                                    v
-                                  Kafka
-                                    |
-                                    v
-                           ClickEventConsumer
-                                    |
-                                    v
-                           ClickEventProcessor
-                                    |
-                                    v
-                                PostgreSQL
-                              (ClickCount + 1)
+   +-- Cache hit --------------------------+
+   |                                      |
+   +-- Cache miss -> PostgreSQL            |
+                                          |
+                                          v
+                               Original destination
+                                          |
+                                          v
+                                Publish UrlClickedEvent
+                                          |
+                                          v
+                                  Kafka resilience
+                                  +--------+--------+
+                                  |                 |
+                               Retry            Circuit
+                                  |              Breaker
+                                  +--------+--------+
+                                           |
+                                           v
+                                          Kafka
+                                           |
+                                           v
+                                  ClickEventConsumer
+                                           |
+                                           v
+                                  ClickEventProcessor
+                                           |
+                                           v
+                                      PostgreSQL
+                                    (ClickCount + 1)
 ```
 
 The redirect request does not wait for PostgreSQL to persist the click count. Click tracking is performed asynchronously through Kafka.
+
+Kafka publishing is protected by retry and circuit-breaker mechanisms so that a Kafka outage does not unnecessarily make the core redirect functionality unavailable.
 
 The Kafka event contains:
 
@@ -87,13 +103,73 @@ OccurredAt
 
 The consumer uses manual Kafka offset commits together with database-backed event idempotency to prevent duplicate delivery from incrementing the click count more than once.
 
-### Kafka Delivery Model
+---
 
-The API waits for Kafka to acknowledge the click event before returning the redirect response.
+## Kafka Delivery Model
 
-This currently provides stronger event-delivery guarantees than fire-and-forget publishing, but also means Kafka availability can affect redirect availability.
+The API waits for Kafka to acknowledge the click event before returning the redirect response when the circuit is closed and the publish operation is healthy.
 
-Future resilience work will investigate patterns such as retry policies, circuit breakers, and the transactional outbox pattern.
+This provides a clear acknowledgement point for the event while keeping the PostgreSQL click-count update asynchronous.
+
+Kafka publishing currently uses two resilience mechanisms:
+
+### Retry and Backoff
+
+Transient publishing failures are retried up to the configured number of attempts using a short exponential backoff.
+
+The current retry sequence is approximately:
+
+```text
+Attempt 1
+   |
+   | failure
+   v
+short delay
+   |
+   v
+Attempt 2
+   |
+   | failure
+   v
+longer delay
+   |
+   v
+Attempt 3
+   |
+   | failure
+   v
+Publish failure
+```
+
+### Circuit Breaker
+
+Repeated Kafka failures cause the circuit breaker to open.
+
+When the circuit is open:
+
+```text
+Redirect request
+      |
+      v
+Circuit OPEN
+      |
+      +---- Kafka publish skipped
+      |
+      v
+Redirect continues
+```
+
+After the configured break duration, the circuit enters half-open and allows a trial request.
+
+A successful trial closes the circuit and Kafka publishing resumes normally.
+
+This prevents prolonged Kafka outages from causing every redirect request to repeatedly wait for Kafka timeouts.
+
+The redirect path deliberately treats click-event persistence as non-critical to serving the destination URL.
+
+A future **transactional outbox** can further improve delivery guarantees by durably storing events before publishing them to Kafka.
+
+---
 
 ## Setup
 
@@ -178,7 +254,7 @@ For local Kafka development, the API uses:
 localhost:9093
 ```
 
-For local OpenTelemetry development, the API can send traces to the local OpenTelemetry Collector endpoint.
+For local OpenTelemetry development, the API can send traces to the local OpenTelemetry Collector endpoint when available.
 
 ### Apply Database Migrations
 
@@ -224,7 +300,9 @@ From the repository root:
 dotnet test
 ```
 
-The test suite includes unit tests, database integration tests, concurrency tests, and Kafka integration tests.
+The test suite includes unit tests, database integration tests, concurrency tests, Kafka integration tests, resilience tests, and circuit-breaker tests.
+
+---
 
 ## API
 
@@ -332,7 +410,7 @@ If a Redis read fails, the service falls back to PostgreSQL.
 
 If a Redis write fails after successfully retrieving the URL from PostgreSQL, the request still succeeds and the URL is returned without caching the result.
 
-This prevents a Redis outage from unnecessarily making the URL redirection functionality unavailable.
+This prevents a Redis outage from unnecessarily making URL redirection unavailable.
 
 ### Asynchronous Click Tracking
 
@@ -342,7 +420,7 @@ When a valid short code is redirected, the API publishes a `UrlClickedEvent` to 
 
 The consumer then processes the event asynchronously and increments the corresponding PostgreSQL click count.
 
-This removes the PostgreSQL write from the latency-sensitive redirect path.
+This removes the PostgreSQL click-count write from the latency-sensitive redirect path.
 
 ### Click Event Idempotency
 
@@ -377,7 +455,7 @@ ClickCount = ClickCount + 1
 
 This avoids lost updates when multiple events attempt to increment the same URL concurrently.
 
-Atomic database updates are now performed by the asynchronous click-event processor rather than directly on the redirect request path.
+Atomic database updates are performed by the asynchronous click-event processor rather than directly on the redirect request path.
 
 ### Rate Limiting
 
@@ -408,6 +486,9 @@ Logs are generated for important application events, including:
 - Redis cache hits and misses
 - URL redirects
 - Kafka click-event publication
+- Kafka retries
+- Kafka publish failures
+- Kafka circuit-breaker transitions
 - Kafka consumer startup and shutdown
 - Kafka processing failures
 - Unknown short codes
@@ -421,6 +502,8 @@ Structured logging is used so operational properties such as `ShortCode`, `Event
 Sensitive information, including credentials and unnecessary request data, is not logged.
 
 The logging implementation is designed to integrate with cloud-based observability platforms when the application is deployed to AWS.
+
+---
 
 ## Docker
 
@@ -466,6 +549,10 @@ Docker containers → kafka:9092
 Host applications  → localhost:9093
 ```
 
+Grafana persists its application state using a Docker volume so dashboards, users, and datasource configuration survive container recreation.
+
+---
+
 ## CI/CD
 
 GitHub Actions automatically validates changes through the following pipeline:
@@ -484,6 +571,8 @@ Docker images pushed to ECR use the Git commit SHA as their tag, providing immut
 
 AWS application deployment is not currently part of the CI/CD pipeline.
 
+---
+
 ## Tech Stack
 
 | Technology              | Purpose                                           |
@@ -495,6 +584,7 @@ AWS application deployment is not currently part of the CI/CD pipeline.
 | Redis                   | Distributed caching                               |
 | Apache Kafka            | Event streaming and asynchronous click processing |
 | Confluent.Kafka         | .NET Kafka client                                 |
+| Polly                   | Resilience and circuit-breaker policies           |
 | OpenTelemetry           | Metrics and distributed tracing                   |
 | Prometheus              | Metrics collection and querying                   |
 | Grafana                 | Metrics dashboards                                |
@@ -512,6 +602,8 @@ AWS application deployment is not currently part of the CI/CD pipeline.
 | Kubernetes              | Container orchestration _(planned)_               |
 | AWS                     | Cloud infrastructure and deployment               |
 
+---
+
 ## Testing
 
 The project uses multiple levels of automated testing:
@@ -519,6 +611,8 @@ The project uses multiple levels of automated testing:
 - **Unit tests** for service and controller behaviour.
 - **Integration tests** for API behaviour and database persistence.
 - **Kafka integration tests** for event publication and consumer processing.
+- **Resilience tests** for Kafka retry and failure behaviour.
+- **Circuit-breaker tests** for circuit opening and recovery.
 - **Testcontainers** to run PostgreSQL during integration tests.
 - **Moq** to isolate Redis and Kafka producer dependencies where appropriate.
 - **Concurrency tests** to validate correct behaviour under simultaneous requests.
@@ -554,6 +648,11 @@ The test suite verifies functionality including:
 - Rate limiting for URL creation
 - Rate limiting for redirects
 - `429 Too Many Requests` responses
+- Kafka retry behaviour
+- Kafka publish failure handling
+- Circuit-breaker opening
+- Circuit-breaker fail-fast behaviour
+- Circuit-breaker recovery
 - End-to-end API behaviour
 
 Kafka consumer integration tests verify the real message path:
@@ -576,6 +675,8 @@ Run the complete test suite with:
 ```bash
 dotnet test
 ```
+
+---
 
 ## Observability
 
@@ -612,11 +713,24 @@ urlshortener_click_events_published_total
 urlshortener_click_events_processed_total
 urlshortener_click_events_duplicates_total
 urlshortener_click_events_publish_failures_total
+urlshortener_click_events_publish_retries_total
 urlshortener_kafka_publish_duration_milliseconds
 urlshortener_click_events_processing_duration_milliseconds
+urlshortener_kafka_circuit_opened_total
+urlshortener_kafka_circuit_half_opened_total
+urlshortener_kafka_circuit_closed_total
 ```
 
-These metrics provide visibility into the Kafka click-processing pipeline, including throughput, failures, duplicate events, and latency.
+These metrics provide visibility into:
+
+- Kafka publishing throughput
+- Kafka retries
+- Kafka failures
+- Kafka publish latency
+- Click-event processing latency
+- Duplicate events
+- Kafka circuit-breaker transitions
+- Click-event processing throughput
 
 ### Grafana
 
@@ -632,11 +746,16 @@ The dashboard provides visibility into:
 - Click events processed
 - Duplicate click events
 - Kafka publish failures
+- Kafka publish retries
 - Kafka publish throughput
-- Click processing throughput
+- Kafka failure rate
 - Kafka publish latency
 - Click processing latency
-- HTTP application metrics
+- Published vs processed events
+- Unprocessed events
+- Kafka circuit-breaker transitions
+
+The dashboard is designed to make dependency failures and resilience behaviour visible during local testing.
 
 ### Prometheus
 
@@ -664,18 +783,31 @@ The tracing flow is:
 
 ```text
 HTTP request
+
     |
+
     +-- Redis operation
+
     |
+
     +-- kafka.publish
+
             |
+
             v
+
         Kafka topic
+
             |
+
             v
+
     click_event.process
+
             |
+
             v
+
        PostgreSQL
 ```
 
@@ -687,15 +819,17 @@ http://localhost:16686
 
 ### Observability Documentation
 
-Detailed setup instructions, metric definitions, PromQL examples, tracing information, and troubleshooting guidance are available in:
+Detailed setup instructions, metric definitions, PromQL examples, tracing information, resilience metrics, dashboard information, and troubleshooting guidance are available in:
 
-[`src/UrlShortenerBackend/Observability/README.md`](src/UrlShortenerBackend/Observability/README.md)
+`src/UrlShortenerBackend/Observability/README.md`
+
+---
 
 ## Load Testing
 
 Load and performance testing is performed using [k6](https://k6.io/).
 
-Load-test scripts, benchmark results, and instructions for running the performance tests are available in the [`load-tests/README.md`](load-tests/README.md).
+Load-test scripts, benchmark results, and instructions for running the performance tests are available in `load-tests/README.md`.
 
 Initial benchmarking identified synchronous click-count persistence as a key performance bottleneck under concurrent load.
 
@@ -718,11 +852,49 @@ This represents approximately:
 
 The benchmark measures the application path as a whole, including Kafka event publication, so the improvement represents the effect of the architectural change rather than Kafka alone.
 
+### Resilience Testing
+
+The application has also been tested under Kafka failure conditions.
+
+Kafka can be stopped during local testing:
+
+```bash
+docker stop urlshortener-kafka
+```
+
+During the outage:
+
+```text
+Kafka publish
+    |
+    +-- retry
+    |
+    +-- retry
+    |
+    +-- circuit opens
+    |
+    v
+redirect continues
+```
+
+This demonstrates that the redirect path remains available even when Kafka is unavailable.
+
+Grafana metrics can be used to observe:
+
+- Retry attempts
+- Publish failures
+- Increased Kafka publish latency
+- Circuit-breaker opening
+- Circuit half-open transitions
+- Circuit recovery
+
+---
+
 ## Project Status
 
 🚧 **In development**
 
-The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, concurrency handling, Kafka-based asynchronous processing, observability, performance benchmarking, and AWS container registry integration.
+The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, concurrency handling, Kafka-based asynchronous processing, resilience mechanisms, observability, performance benchmarking, and AWS container registry integration.
 
 ### Completed
 
@@ -763,6 +935,13 @@ The initial API and database foundation have been implemented alongside a servic
 - Database-backed processed-event tracking
 - Concurrent click-count correctness testing
 - Kafka consumer integration testing
+- Kafka producer unit testing
+- Kafka retry and exponential backoff
+- Kafka publish failure handling
+- Kafka circuit breaker
+- Circuit-breaker unit tests
+- Circuit-breaker recovery testing
+- Kafka failure and recovery testing with Docker
 - k6 load-testing infrastructure
 - Initial performance benchmarking
 - Performance bottleneck identification
@@ -770,8 +949,10 @@ The initial API and database foundation have been implemented alongside a servic
 - OpenTelemetry metrics
 - OpenTelemetry distributed tracing
 - Custom Kafka application metrics
+- Kafka resilience metrics
 - Prometheus metrics collection
 - Grafana dashboards
+- Persistent Grafana storage
 - OpenTelemetry Collector
 - Jaeger distributed tracing
 - Kafka trace-context propagation
@@ -796,14 +977,13 @@ The initial API and database foundation have been implemented alongside a servic
 
 ### Planned
 
-- Kafka failure handling and resilience
-- Retry and backoff policies
-- Circuit-breaker patterns
-- Transactional outbox investigation
-- PostgreSQL tracing instrumentation
-- Liveness and readiness endpoints
+- Transactional outbox implementation
+- Durable click-event delivery
 - Kafka consumer lag monitoring
-- Alerting
+- Kafka retry and event delivery alerting
+- Kafka consumer health metrics
+- Liveness and readiness endpoints
+- PostgreSQL tracing instrumentation
 - Grafana dashboard provisioning
 - Higher-concurrency load testing
 - Performance optimisation
@@ -813,7 +993,8 @@ The initial API and database foundation have been implemented alongside a servic
 - Managed PostgreSQL deployment
 - Managed Redis deployment
 - Kubernetes deployment
-- Distributed system scalability
-- Resilience and fault-tolerance testing
+- Distributed system scalability testing
+- Expanded resilience and fault-tolerance testing
+- Cloud-based monitoring and alerting
 
 The project will progressively evolve towards a **distributed, scalable, observable, resilient, and production-oriented backend system**.

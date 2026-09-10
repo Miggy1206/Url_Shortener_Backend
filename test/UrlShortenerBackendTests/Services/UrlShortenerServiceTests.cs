@@ -559,4 +559,136 @@ public class UrlShortenerServiceTests : IClassFixture<PostgresFixture>
         return await service.CreateShortUrlAsync(
             "https://www.example.com");
     }
+
+    [Fact]
+    public async Task RedirectUrlAsync_WhenKafkaPublishFails_StillReturnsUrl()
+    {
+        // Arrange
+        await ClearUrlsAsync();
+
+        await using var context = CreateDbContext();
+
+        context.Urls.Add(new Url
+        {
+            OriginalUrl = "https://www.example.com",
+            ShortCode = "abc123",
+            CreatedAt = DateTime.UtcNow,
+            ClickCount = 0
+        });
+
+        await context.SaveChangesAsync();
+
+        var redisMock = new Mock<IConnectionMultiplexer>();
+        var databaseMock = new Mock<IDatabase>();
+        var producerMock = new Mock<IClickEventProducer>();
+
+        redisMock
+            .Setup(x => x.GetDatabase(
+                It.IsAny<int>(),
+                It.IsAny<object?>()))
+            .Returns(databaseMock.Object);
+
+        databaseMock
+            .Setup(x => x.StringGetAsync(
+                It.IsAny<RedisKey>(),
+                It.IsAny<CommandFlags>()))
+            .ReturnsAsync("https://www.example.com");
+
+        producerMock
+            .Setup(x => x.PublishAsync(
+                It.IsAny<UrlClickedEvent>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(
+                new Exception("Kafka unavailable"));
+
+        var service = CreateService(
+            context,
+            redisMock.Object,
+            producerMock.Object);
+
+        // Act
+        var result = await service.RedirectUrlAsync(
+            "abc123");
+
+        // Assert
+        Assert.Equal(
+            "https://www.example.com",
+            result);
+
+        producerMock.Verify(
+            x => x.PublishAsync(
+                It.Is<UrlClickedEvent>(
+                    e => e.ShortCode == "abc123"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RedirectUrlAsync_WhenKafkaPublishFails_LogsWarning()
+    {
+        // Arrange
+        await ClearUrlsAsync();
+
+        await using var context = CreateDbContext();
+
+        context.Urls.Add(new Url
+        {
+            OriginalUrl = "https://www.example.com",
+            ShortCode = "abc123",
+            CreatedAt = DateTime.UtcNow,
+            ClickCount = 0
+        });
+
+        await context.SaveChangesAsync();
+
+        var redisMock = new Mock<IConnectionMultiplexer>();
+        var databaseMock = new Mock<IDatabase>();
+        var producerMock = new Mock<IClickEventProducer>();
+        var loggerMock = new Mock<ILogger<UrlShortenerService>>();
+
+        redisMock
+            .Setup(x => x.GetDatabase(
+                It.IsAny<int>(),
+                It.IsAny<object?>()))
+            .Returns(databaseMock.Object);
+
+        databaseMock
+            .Setup(x => x.StringGetAsync(
+                It.IsAny<RedisKey>(),
+                It.IsAny<CommandFlags>()))
+            .ReturnsAsync("https://www.example.com");
+
+        producerMock
+            .Setup(x => x.PublishAsync(
+                It.IsAny<UrlClickedEvent>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(
+                new Exception("Kafka unavailable"));
+
+        var service = CreateService(
+            context,
+            redisMock.Object,
+            producerMock.Object,
+            loggerMock.Object);
+
+        // Act
+        var result = await service.RedirectUrlAsync("abc123");
+
+        // Assert
+        Assert.Equal(
+            "https://www.example.com",
+            result);
+
+        loggerMock.Verify(
+            x => x.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>(
+                    (state, type) =>
+                        state.ToString()!.Contains(
+                            "Failed to publish click event")),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
 }
