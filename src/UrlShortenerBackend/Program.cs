@@ -11,10 +11,14 @@ using UrlShortenerBackend.Api.Observability;
 using OpenTelemetry.Trace;
 using Polly;
 using Polly.CircuitBreaker;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks; 
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+
+builder.Services.AddSingleton<KafkaConsumerHealthState>();
 
 builder.Services
     .AddOpenTelemetry()
@@ -51,7 +55,17 @@ builder.Services.AddOpenApi();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddControllers();
-builder.Services.AddHealthChecks();
+
+builder.Services
+    .AddHealthChecks()
+    .AddDbContextCheck<UrlShortenerDbContext>(
+        name: "postgres",
+        tags: ["ready"])
+    .AddCheck<KafkaConsumerHealthCheck>(
+        name: "kafka-consumer",
+        tags: ["kafka"]);
+
+
 builder.Services.AddScoped<IUrlShortenerService, UrlShortenerService>();
 builder.Services.AddProblemDetails();
 builder.Services.AddScoped<IUrlRepository, UrlRepository>();
@@ -160,7 +174,26 @@ builder.Services.AddResiliencePipeline(
 
 var app = builder.Build();
 
-app.MapHealthChecks("/healthz");
+app.MapHealthChecks("/health/live", 
+    new HealthCheckOptions 
+    { 
+        Predicate = _ => false 
+    }); 
+
+app.MapHealthChecks("/health/ready", 
+    new HealthCheckOptions 
+    { 
+        Predicate = check => 
+            check.Tags.Contains("ready") 
+    });
+
+app.MapHealthChecks(
+    "/health/kafka",
+    new HealthCheckOptions
+    {
+        Predicate = check =>
+            check.Tags.Contains("kafka")
+    });
 
 app.MapPrometheusScrapingEndpoint();
 
@@ -181,7 +214,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
-app.UseRateLimiter();
+//app.UseRateLimiter();
 
 app.MapControllers();
 

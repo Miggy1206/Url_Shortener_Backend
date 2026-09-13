@@ -11,7 +11,8 @@ namespace UrlShortenerBackend.Api.Kafka;
 public class ClickEventConsumer(
     IConfiguration configuration,
     IServiceScopeFactory scopeFactory,
-    ILogger<ClickEventConsumer> logger) : BackgroundService
+    ILogger<ClickEventConsumer> logger,
+    KafkaConsumerHealthState consumerHealth) : BackgroundService
 {
     private readonly string _bootstrapServers =
         configuration["Kafka:BootstrapServers"]
@@ -46,6 +47,8 @@ public class ClickEventConsumer(
 
         consumer.Subscribe(_topic);
 
+        consumerHealth.MarkStarted();
+
         logger.LogInformation(
             "Kafka click event consumer started for topic {Topic}",
             _topic);
@@ -56,8 +59,17 @@ public class ClickEventConsumer(
             {
                 try
                 {
-                    var result = consumer.Consume(
-                        stoppingToken);
+                    var result =
+                        consumer.Consume(
+                            TimeSpan.FromSeconds(1));
+
+                    if (result is null)
+                    {
+                        UpdateConsumerLag(
+                            consumer);
+
+                        continue;
+                    }
 
                     var parentContext =
                         Propagators.DefaultTextMapPropagator.Extract(
@@ -90,6 +102,10 @@ public class ClickEventConsumer(
                             result.Offset.Value);
 
                         consumer.Commit(result);
+
+                        UpdateConsumerLag(
+                            consumer);
+
                         continue;
                     }
 
@@ -134,10 +150,15 @@ public class ClickEventConsumer(
                         clickEvent,
                         stoppingToken);
 
+                    consumerHealth.MarkProcessed();
+
                     activity?.SetStatus(
                         ActivityStatusCode.Ok);
 
                     consumer.Commit(result);
+
+                    UpdateConsumerLag(
+                        consumer);
 
                     logger.LogDebug(
                         "Processed click event {EventId} for short code {ShortCode} at partition {Partition} offset {Offset}",
@@ -173,10 +194,58 @@ public class ClickEventConsumer(
         }
         finally
         {
+            consumerHealth.MarkStopped();
+
             consumer.Close();
 
             logger.LogInformation(
                 "Kafka click event consumer stopped.");
         }
+    }
+
+    private void UpdateConsumerLag(
+        IConsumer<string, string> consumer)
+    {
+        long totalLag = 0;
+
+        foreach (var partition in consumer.Assignment)
+        {
+            try
+            {
+                var position =
+                    consumer.Position(partition);
+
+                var watermark =
+                    consumer.GetWatermarkOffsets(
+                        partition);
+
+                if (position == Offset.Unset ||
+                    watermark.High == Offset.Unset)
+                {
+                    continue;
+                }
+
+                var partitionLag =
+                    Math.Max(
+                        0,
+                        watermark.High.Value -
+                        position.Value);
+
+                totalLag += partitionLag;
+            }
+            catch (KafkaException ex)
+            {
+                logger.LogDebug(
+                    ex,
+                    "Unable to calculate Kafka consumer lag for partition {Partition}",
+                    partition.Partition.Value);
+            }
+        }
+
+        consumerHealth.SetConsumerLag(
+            totalLag);
+
+        UrlShortenerMetrics.SetKafkaConsumerLag(
+            totalLag);
     }
 }

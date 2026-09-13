@@ -126,4 +126,22 @@ public static class UrlShortenerMetrics
             ref _outboxOldestMessageTicks,
             oldestOccurredAt?.Ticks ?? 0);
     }
+
+    private static long _kafkaConsumerLag;
+
+    public static readonly ObservableGauge<long> KafkaConsumerLag =
+        Meter.CreateObservableGauge(
+            "urlshortener.kafka.consumer.lag",
+            () => Volatile.Read(ref _kafkaConsumerLag),
+            unit: "{messages}",
+            description: "Number of Kafka messages the consumer is behind.");
+
+    public static void SetKafkaConsumerLag(long lag)
+    {
+        Interlocked.Exchange(
+            ref _kafkaConsumerLag,
+            Math.Max(0, lag));
+    }
+
+    
 }
