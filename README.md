@@ -2,9 +2,9 @@
 
 A distributed URL shortening service built with **C# and .NET 10**.
 
-The project is designed as a practical exploration of modern backend and distributed systems engineering, progressing from a simple API into a scalable, observable, resilient, production-oriented service.
+The project is a practical exploration of modern backend and distributed systems engineering, progressing from a simple REST API into a scalable, observable, resilient, production-oriented service.
 
-The focus is on understanding how distributed services are designed, tested, containerised, deployed, monitored, and scaled, while exploring technologies such as PostgreSQL, Redis, Kafka, Docker, AWS, Kubernetes, and OpenTelemetry.
+The focus is on understanding how distributed services are designed, tested, containerised, deployed, monitored, and scaled, while exploring technologies such as PostgreSQL, Redis, Kafka, Docker, AWS, and OpenTelemetry.
 
 ---
 
@@ -12,6 +12,7 @@ The focus is on understanding how distributed services are designed, tested, con
 
 - [Objectives](#objectives)
 - [Architecture](#architecture)
+- [Transactional Outbox](#transactional-outbox)
 - [Setup](#setup)
 - [API](#api)
 - [Docker](#docker)
@@ -33,18 +34,19 @@ The main objectives of this project are to:
 - Develop practical experience with **PostgreSQL and Entity Framework Core**.
 - Use **Redis** for distributed caching and performance optimisation.
 - Use **Apache Kafka** for asynchronous event processing and event-driven architecture.
+- Implement the **transactional outbox pattern** for durable event delivery.
 - Apply automated **unit and integration testing** throughout development.
 - Learn containerisation and service orchestration using **Docker and Kubernetes**.
 - Explore **AWS** and cloud-based infrastructure.
 - Implement **observability** using metrics, tracing, dashboards, and structured logging.
-- Understand concepts such as **load balancing, service communication, caching, concurrency, messaging, observability, resilience, retries, circuit breakers, and fault isolation**.
+- Understand concepts such as **load balancing, service communication, caching, concurrency, messaging, observability, resilience, retries, circuit breakers, fault isolation, and durable event delivery**.
 - Apply software engineering principles around **architecture, maintainability, scalability, security, and performance**.
 
 ---
 
 ## Architecture
 
-The application currently consists of an ASP.NET Core API backed by PostgreSQL and Redis, with Kafka used to decouple click-count processing from the redirect request.
+The application currently consists of an ASP.NET Core API backed by PostgreSQL and Redis, with Kafka used to asynchronously process click events.
 
 A simplified redirect flow is:
 
@@ -58,17 +60,24 @@ ASP.NET Core API
 Redis cache
    |
    +-- Cache hit --------------------------+
-   |                                      |
+   |                                       |
    +-- Cache miss -> PostgreSQL            |
-                                          |
-                                          v
-                               Original destination
-                                          |
-                                          v
-                                Publish UrlClickedEvent
-                                          |
-                                          v
-                                  Kafka resilience
+                                           |
+                                           v
+                              Original destination
+                                           |
+                                           v
+                              PostgreSQL transaction
+                                           |
+                                           v
+                                   OutboxMessage
+                                           |
+                                           v
+                                   302 Redirect
+                                           |
+                                           v
+                                  OutboxPublisher
+                                           |
                                   +--------+--------+
                                   |                 |
                                Retry            Circuit
@@ -76,7 +85,7 @@ Redis cache
                                   +--------+--------+
                                            |
                                            v
-                                          Kafka
+                                         Kafka
                                            |
                                            v
                                   ClickEventConsumer
@@ -86,88 +95,235 @@ Redis cache
                                            |
                                            v
                                       PostgreSQL
-                                    (ClickCount + 1)
+                                   (ClickCount + 1)
 ```
 
-The redirect request does not wait for PostgreSQL to persist the click count. Click tracking is performed asynchronously through Kafka.
+The redirect path no longer performs the click-count database update synchronously.
 
-Kafka publishing is protected by retry and circuit-breaker mechanisms so that a Kafka outage does not unnecessarily make the core redirect functionality unavailable.
+Instead, a valid redirect creates a durable `OutboxMessage` inside the same PostgreSQL transaction used by the application. The redirect can then complete without waiting for Kafka or the click-count update.
 
-The Kafka event contains:
+The outbox publisher asynchronously reads unpublished events and publishes them to Kafka.
 
-```text
-EventId
-ShortCode
-OccurredAt
-```
-
-The consumer uses manual Kafka offset commits together with database-backed event idempotency to prevent duplicate delivery from incrementing the click count more than once.
+Kafka publishing is protected by retry and circuit-breaker mechanisms so that Kafka outages do not prevent the application from serving redirects.
 
 ---
 
-## Kafka Delivery Model
+## Transactional Outbox
 
-The API waits for Kafka to acknowledge the click event before returning the redirect response when the circuit is closed and the publish operation is healthy.
+The project implements the **transactional outbox pattern** to improve event delivery reliability.
 
-This provides a clear acknowledgement point for the event while keeping the PostgreSQL click-count update asynchronous.
+The core problem with publishing directly to Kafka from the redirect request is that the application could successfully serve the redirect while the Kafka publish fails.
 
-Kafka publishing currently uses two resilience mechanisms:
-
-### Retry and Backoff
-
-Transient publishing failures are retried up to the configured number of attempts using a short exponential backoff.
-
-The current retry sequence is approximately:
-
-```text
-Attempt 1
-   |
-   | failure
-   v
-short delay
-   |
-   v
-Attempt 2
-   |
-   | failure
-   v
-longer delay
-   |
-   v
-Attempt 3
-   |
-   | failure
-   v
-Publish failure
-```
-
-### Circuit Breaker
-
-Repeated Kafka failures cause the circuit breaker to open.
-
-When the circuit is open:
+The transactional outbox changes the sequence to:
 
 ```text
 Redirect request
       |
       v
-Circuit OPEN
+PostgreSQL transaction
       |
-      +---- Kafka publish skipped
+      +-- Application data
+      |
+      +-- OutboxMessage
       |
       v
-Redirect continues
+Transaction committed
+      |
+      v
+302 Redirect
+      |
+      v
+OutboxPublisher
+      |
+      v
+Kafka
 ```
 
-After the configured break duration, the circuit enters half-open and allows a trial request.
+The important guarantee is that once the PostgreSQL transaction commits, the click event is durably stored even if Kafka is unavailable.
 
-A successful trial closes the circuit and Kafka publishing resumes normally.
+### Outbox Message
 
-This prevents prolonged Kafka outages from causing every redirect request to repeatedly wait for Kafka timeouts.
+Each outbox record contains:
 
-The redirect path deliberately treats click-event persistence as non-critical to serving the destination URL.
+```text
+Id
+Type
+Payload
+OccurredAt
+PublishedAt
+AttemptCount
+LastAttemptAt
+LastError
+ProcessingStartedAt
+```
 
-A future **transactional outbox** can further improve delivery guarantees by durably storing events before publishing them to Kafka.
+The event currently stored in the outbox is:
+
+```text
+UrlClickedEvent
+    |
+    +-- EventId
+    +-- ShortCode
+    +-- OccurredAt
+```
+
+### Concurrent Outbox Publishers
+
+Multiple publisher instances can safely operate against the same outbox.
+
+Messages are claimed using PostgreSQL row-level locking with:
+
+```sql
+FOR UPDATE SKIP LOCKED
+```
+
+This prevents multiple publisher instances from simultaneously claiming the same message.
+
+The claim process is:
+
+```text
+Publisher A                  Publisher B
+     |                            |
+     v                            v
+SELECT ... FOR UPDATE       SELECT ... FOR UPDATE
+SKIP LOCKED                  SKIP LOCKED
+     |                            |
+     v                            v
+Claim message               Skip locked message
+```
+
+This allows publishers to process different messages concurrently without requiring a distributed lock.
+
+### Failed Publishing
+
+If Kafka publication fails:
+
+```text
+Publish attempt fails
+        |
+        v
+ProcessingStartedAt = NULL
+        |
+        v
+LastError recorded
+        |
+        v
+Message remains unpublished
+        |
+        v
+Retry during a future polling cycle
+```
+
+This ensures failed messages remain durable and available for retry.
+
+### Stale Claims
+
+A publisher can crash after claiming a message but before completing publication.
+
+To recover from this situation, claims have a timeout.
+
+Messages with an expired `ProcessingStartedAt` can be reclaimed by another publisher.
+
+This prevents abandoned claims from permanently blocking event delivery.
+
+### Kafka Outage Recovery
+
+The outbox has been tested against an actual local Kafka outage.
+
+During testing:
+
+```text
+Kafka stopped
+     |
+     v
+Redirects continue returning 302
+     |
+     v
+Click events accumulate in PostgreSQL
+     |
+     v
+Kafka restarted
+     |
+     v
+OutboxPublisher drains backlog
+     |
+     v
+Kafka consumer processes events
+     |
+     v
+Click counts catch up
+```
+
+This demonstrates that temporary Kafka unavailability no longer causes click events to be lost.
+
+---
+
+## Kafka Delivery Model
+
+The redirect request **does not wait for Kafka**.
+
+Instead, it waits only for the PostgreSQL transaction containing the outbox event to commit.
+
+This provides a durable acknowledgement point without putting Kafka latency directly on the redirect path.
+
+The delivery path is therefore:
+
+```text
+HTTP request
+    |
+    v
+PostgreSQL transaction
+    |
+    +-- OutboxMessage persisted
+    |
+    v
+302 response
+```
+
+and separately:
+
+```text
+OutboxMessage
+    |
+    v
+OutboxPublisher
+    |
+    v
+Kafka
+    |
+    v
+ClickEventConsumer
+```
+
+### Retry and Backoff
+
+Transient Kafka publishing failures are retried using a short exponential backoff.
+
+The resilience layer prevents temporary Kafka failures from immediately becoming permanent event-delivery failures.
+
+### Circuit Breaker
+
+Repeated Kafka failures cause the Kafka publisher circuit breaker to open.
+
+When open:
+
+```text
+OutboxPublisher
+       |
+       v
+Kafka circuit OPEN
+       |
+       +---- Kafka publish rejected/fails fast
+       |
+       v
+Outbox message remains unpublished
+```
+
+Once the configured break duration expires, the circuit enters half-open and allows a trial operation.
+
+A successful operation closes the circuit and normal publishing resumes.
+
+The transactional outbox means the circuit breaker no longer determines whether the click event is durable: the event already exists in PostgreSQL.
 
 ---
 
@@ -210,12 +366,12 @@ docker compose --env-file .env.local up -d
 The local infrastructure exposes:
 
 ```text
-PostgreSQL → localhost:5433
-Redis      → localhost:6379
-Kafka      → localhost:9093
-Prometheus → localhost:9090
-Grafana    → localhost:3100
-Jaeger     → localhost:16686
+PostgreSQL -> localhost:5433
+Redis      -> localhost:6379
+Kafka      -> localhost:9093
+Prometheus -> localhost:9090
+Grafana    -> localhost:3100
+Jaeger     -> localhost:16686
 ```
 
 Inside the Docker Compose network, application containers communicate with Kafka using:
@@ -239,7 +395,9 @@ cd src/UrlShortenerBackend
 
 dotnet user-secrets init
 
-dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5433;Database=urlshortener;Username=postgres;Password=<your-password>"
+dotnet user-secrets set \
+  "ConnectionStrings:DefaultConnection" \
+  "Host=localhost;Port=5433;Database=urlshortener;Username=postgres;Password=<your-password>"
 ```
 
 The local API connects to Redis using:
@@ -248,13 +406,11 @@ The local API connects to Redis using:
 localhost:6379
 ```
 
-For local Kafka development, the API uses:
+For local Kafka development:
 
 ```text
 localhost:9093
 ```
-
-For local OpenTelemetry development, the API can send traces to the local OpenTelemetry Collector endpoint when available.
 
 ### Apply Database Migrations
 
@@ -264,7 +420,7 @@ dotnet ef database update
 
 ### Create the Kafka Topic
 
-The click event topic is:
+The production/local Docker topic is:
 
 ```text
 url-clicked
@@ -300,7 +456,7 @@ From the repository root:
 dotnet test
 ```
 
-The test suite includes unit tests, database integration tests, concurrency tests, Kafka integration tests, resilience tests, and circuit-breaker tests.
+The test suite includes unit tests, database integration tests, concurrency tests, Kafka integration tests, resilience tests, outbox tests, and circuit-breaker tests.
 
 ---
 
@@ -414,17 +570,19 @@ This prevents a Redis outage from unnecessarily making URL redirection unavailab
 
 ### Asynchronous Click Tracking
 
-Click counts are no longer updated synchronously as part of the redirect request.
+Click counts are not updated synchronously during the redirect request.
 
-When a valid short code is redirected, the API publishes a `UrlClickedEvent` to Kafka.
+When a valid short code is redirected, the API creates a `UrlClickedEvent` and persists it in the PostgreSQL outbox as part of a transaction.
 
-The consumer then processes the event asynchronously and increments the corresponding PostgreSQL click count.
+The outbox publisher subsequently publishes the event to Kafka.
 
-This removes the PostgreSQL click-count write from the latency-sensitive redirect path.
+The consumer then processes the event asynchronously and increments the PostgreSQL click count.
+
+This removes the click-count database write and Kafka delivery latency from the latency-sensitive redirect path.
 
 ### Click Event Idempotency
 
-Kafka consumers need to account for the possibility of duplicate message delivery.
+Kafka consumers need to account for duplicate message delivery.
 
 The application assigns every click event a unique `EventId`.
 
@@ -447,7 +605,7 @@ This prevents the same Kafka event from incrementing the click count more than o
 
 ### Click Count Concurrency
 
-The click count itself is updated atomically at the database level:
+The click count is updated atomically at the database level:
 
 ```text
 ClickCount = ClickCount + 1
@@ -455,7 +613,7 @@ ClickCount = ClickCount + 1
 
 This avoids lost updates when multiple events attempt to increment the same URL concurrently.
 
-Atomic database updates are performed by the asynchronous click-event processor rather than directly on the redirect request path.
+The click count update is performed by the asynchronous click-event processor rather than directly on the redirect request path.
 
 ### Rate Limiting
 
@@ -485,7 +643,10 @@ Logs are generated for important application events, including:
 - Short URL creation
 - Redis cache hits and misses
 - URL redirects
-- Kafka click-event publication
+- Outbox message creation
+- Outbox message claims
+- Outbox publishing
+- Outbox publishing failures
 - Kafka retries
 - Kafka publish failures
 - Kafka circuit-breaker transitions
@@ -497,11 +658,9 @@ Logs are generated for important application events, including:
 - Redis write failures
 - Duplicate click events
 
-Structured logging is used so operational properties such as `ShortCode`, `EventId`, Kafka partition, Kafka offset, and retry attempts can be captured as structured fields rather than embedded directly into log messages.
+Structured logging is used so operational properties such as `ShortCode`, `EventId`, Kafka partition, Kafka offset, retry attempts, and outbox message identifiers can be captured as structured fields rather than embedded directly into log messages.
 
 Sensitive information, including credentials and unnecessary request data, is not logged.
-
-The logging implementation is designed to integrate with cloud-based observability platforms when the application is deployed to AWS.
 
 ---
 
@@ -545,8 +704,8 @@ curl http://localhost:8080/healthz
 Kafka uses separate listeners for host and container communication:
 
 ```text
-Docker containers → kafka:9092
-Host applications  → localhost:9093
+Docker containers -> kafka:9092
+Host applications  -> localhost:9093
 ```
 
 Grafana persists its application state using a Docker volume so dashboards, users, and datasource configuration survive container recreation.
@@ -584,7 +743,7 @@ AWS application deployment is not currently part of the CI/CD pipeline.
 | Redis                   | Distributed caching                               |
 | Apache Kafka            | Event streaming and asynchronous click processing |
 | Confluent.Kafka         | .NET Kafka client                                 |
-| Polly                   | Resilience and circuit-breaker policies           |
+| Polly                   | Retry and circuit-breaker policies                |
 | OpenTelemetry           | Metrics and distributed tracing                   |
 | Prometheus              | Metrics collection and querying                   |
 | Grafana                 | Metrics dashboards                                |
@@ -613,9 +772,10 @@ The project uses multiple levels of automated testing:
 - **Kafka integration tests** for event publication and consumer processing.
 - **Resilience tests** for Kafka retry and failure behaviour.
 - **Circuit-breaker tests** for circuit opening and recovery.
-- **Testcontainers** to run PostgreSQL during integration tests.
+- **Transactional outbox tests** for durable event handling.
+- **Concurrency tests** for simultaneous requests and publisher instances.
+- **Testcontainers** to run PostgreSQL during integration testing.
 - **Moq** to isolate Redis and Kafka producer dependencies where appropriate.
-- **Concurrency tests** to validate correct behaviour under simultaneous requests.
 
 The test suite verifies functionality including:
 
@@ -634,6 +794,7 @@ The test suite verifies functionality including:
 - Database-level collision handling
 - URL redirection
 - HTTP 302 responses
+- Click-event creation
 - Click-event publication
 - Click-count tracking
 - Concurrent click-count updates
@@ -653,7 +814,16 @@ The test suite verifies functionality including:
 - Circuit-breaker opening
 - Circuit-breaker fail-fast behaviour
 - Circuit-breaker recovery
+- Transactional outbox persistence
+- Outbox message claiming
+- Concurrent outbox publisher claiming
+- Stale outbox claim recovery
+- Failed outbox publication
+- Outbox retry after failure
+- Kafka failure and recovery
 - End-to-end API behaviour
+
+### Kafka Consumer Integration Tests
 
 Kafka consumer integration tests verify the real message path:
 
@@ -669,6 +839,8 @@ ClickEventProcessor
   v
 PostgreSQL
 ```
+
+Test Kafka topics are isolated from the production topic to prevent retained historical messages from interfering with test execution.
 
 Run the complete test suite with:
 
@@ -714,11 +886,19 @@ urlshortener_click_events_processed_total
 urlshortener_click_events_duplicates_total
 urlshortener_click_events_publish_failures_total
 urlshortener_click_events_publish_retries_total
+
 urlshortener_kafka_publish_duration_milliseconds
 urlshortener_click_events_processing_duration_milliseconds
+
 urlshortener_kafka_circuit_opened_total
 urlshortener_kafka_circuit_half_opened_total
 urlshortener_kafka_circuit_closed_total
+
+urlshortener_outbox_backlog
+urlshortener_outbox_oldest_age
+urlshortener_outbox_published_total
+urlshortener_outbox_publish_failures_total
+urlshortener_outbox_publish_duration_milliseconds
 ```
 
 These metrics provide visibility into:
@@ -731,6 +911,11 @@ These metrics provide visibility into:
 - Duplicate events
 - Kafka circuit-breaker transitions
 - Click-event processing throughput
+- Outbox backlog
+- Outbox message age
+- Outbox publication throughput
+- Outbox publication failures
+- Outbox publication latency
 
 ### Grafana
 
@@ -754,8 +939,13 @@ The dashboard provides visibility into:
 - Published vs processed events
 - Unprocessed events
 - Kafka circuit-breaker transitions
+- Outbox backlog
+- Oldest unpublished outbox message age
+- Outbox publication rate
+- Outbox publication failures
+- Outbox publish latency
 
-The dashboard is designed to make dependency failures and resilience behaviour visible during local testing.
+The dashboard is designed to make dependency failures, event backlog, and recovery behaviour visible during local testing.
 
 ### Prometheus
 
@@ -783,31 +973,20 @@ The tracing flow is:
 
 ```text
 HTTP request
-
     |
-
     +-- Redis operation
-
     |
-
+    +-- Outbox persistence
+    |
     +-- kafka.publish
-
             |
-
             v
-
         Kafka topic
-
             |
-
             v
-
     click_event.process
-
             |
-
             v
-
        PostgreSQL
 ```
 
@@ -821,7 +1000,9 @@ http://localhost:16686
 
 Detailed setup instructions, metric definitions, PromQL examples, tracing information, resilience metrics, dashboard information, and troubleshooting guidance are available in:
 
-`src/UrlShortenerBackend/Observability/README.md`
+```text
+src/UrlShortenerBackend/Observability/README.md
+```
 
 ---
 
@@ -829,7 +1010,11 @@ Detailed setup instructions, metric definitions, PromQL examples, tracing inform
 
 Load and performance testing is performed using [k6](https://k6.io/).
 
-Load-test scripts, benchmark results, and instructions for running the performance tests are available in `load-tests/README.md`.
+Load-test scripts, benchmark results, and instructions for running the performance tests are available in:
+
+```text
+load-tests/README.md
+```
 
 Initial benchmarking identified synchronous click-count persistence as a key performance bottleneck under concurrent load.
 
@@ -850,7 +1035,7 @@ This represents approximately:
 - **10.6× lower average latency**
 - **23.5× lower p95 latency**
 
-The benchmark measures the application path as a whole, including Kafka event publication, so the improvement represents the effect of the architectural change rather than Kafka alone.
+The benchmark measures the application path as a whole, including event persistence/publication, so the improvement represents the effect of the asynchronous architecture rather than Kafka alone.
 
 ### Resilience Testing
 
@@ -865,28 +1050,55 @@ docker stop urlshortener-kafka
 During the outage:
 
 ```text
-Kafka publish
-    |
-    +-- retry
-    |
-    +-- retry
-    |
-    +-- circuit opens
-    |
-    v
-redirect continues
+Redirect request
+      |
+      v
+PostgreSQL transaction
+      |
+      +-- Outbox event persisted
+      |
+      v
+302 response
+
+Kafka publishing
+      |
+      +-- retry
+      |
+      +-- circuit opens
+      |
+      v
+Outbox remains durable in PostgreSQL
 ```
 
-This demonstrates that the redirect path remains available even when Kafka is unavailable.
+When Kafka is restarted:
+
+```text
+Kafka returns
+      |
+      v
+OutboxPublisher retries
+      |
+      v
+Backlog drains
+      |
+      v
+ClickEventConsumer processes events
+      |
+      v
+Click counts catch up
+```
 
 Grafana metrics can be used to observe:
 
+- Outbox backlog growth
+- Outbox oldest-message age
 - Retry attempts
 - Publish failures
 - Increased Kafka publish latency
 - Circuit-breaker opening
 - Circuit half-open transitions
 - Circuit recovery
+- Outbox backlog recovery
 
 ---
 
@@ -894,7 +1106,7 @@ Grafana metrics can be used to observe:
 
 🚧 **In development**
 
-The initial API and database foundation have been implemented alongside a service layer, automated testing, Redis caching, Docker infrastructure, CI/CD automation, security scanning, structured logging, concurrency handling, Kafka-based asynchronous processing, resilience mechanisms, observability, performance benchmarking, and AWS container registry integration.
+The project has progressed from a basic URL-shortening API into a distributed, observable, resilient backend architecture with PostgreSQL, Redis, Kafka, a transactional outbox, automated testing, Docker, OpenTelemetry, Grafana, AWS ECR, and CI/CD automation.
 
 ### Completed
 
@@ -925,9 +1137,9 @@ The initial API and database foundation have been implemented alongside a servic
 - Redis failure resilience and PostgreSQL fallback
 - Redis failure resilience tests
 - Structured application logging
-- Structured logging for important URL lifecycle events and Redis failures
+- Structured logging for URL lifecycle events and Redis failures
 - Logging tests for Redis failure scenarios
-- Kafka event publishing
+- Kafka event creation
 - Kafka consumer
 - Asynchronous click-count persistence
 - Atomic click-count updates
@@ -942,6 +1154,15 @@ The initial API and database foundation have been implemented alongside a servic
 - Circuit-breaker unit tests
 - Circuit-breaker recovery testing
 - Kafka failure and recovery testing with Docker
+- Transactional outbox implementation
+- Durable click-event persistence
+- PostgreSQL-backed outbox message claiming
+- Concurrent outbox publisher protection with `FOR UPDATE SKIP LOCKED`
+- Stale outbox claim recovery
+- Outbox publish retry handling
+- Outbox failure handling
+- Outbox metrics
+- Outbox backlog and oldest-event monitoring
 - k6 load-testing infrastructure
 - Initial performance benchmarking
 - Performance bottleneck identification
@@ -953,6 +1174,7 @@ The initial API and database foundation have been implemented alongside a servic
 - Prometheus metrics collection
 - Grafana dashboards
 - Persistent Grafana storage
+- Outbox Grafana monitoring
 - OpenTelemetry Collector
 - Jaeger distributed tracing
 - Kafka trace-context propagation
@@ -977,10 +1199,8 @@ The initial API and database foundation have been implemented alongside a servic
 
 ### Planned
 
-- Transactional outbox implementation
-- Durable click-event delivery
 - Kafka consumer lag monitoring
-- Kafka retry and event delivery alerting
+- Kafka retry and event-delivery alerting
 - Kafka consumer health metrics
 - Liveness and readiness endpoints
 - PostgreSQL tracing instrumentation

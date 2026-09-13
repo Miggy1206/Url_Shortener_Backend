@@ -119,6 +119,9 @@ builder.Services.AddSingleton<IProducer<string, string>>(
 
 
 builder.Services.AddScoped<IClickEventProducer, ClickEventProducer>();
+builder.Services.AddScoped<IOutboxMessageClaimer, OutboxMessageClaimer>();
+
+builder.Services.AddHostedService<OutboxPublisher>();
 
 builder.Services.AddResiliencePipeline(
     "kafka-publish",
