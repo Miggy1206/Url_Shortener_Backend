@@ -1,17 +1,16 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using StackExchange.Redis;
 using UrlShortenerBackend.Api.Data;
-using UrlShortenerBackend.Api.Models;
-using UrlShortenerBackend.Api.Kafka;
 using UrlShortenerBackend.Api.Kafka.Events;
+using UrlShortenerBackend.Api.Models;
 
 namespace UrlShortenerBackend.Api.Services;
 
 public class UrlShortenerService(
     UrlShortenerDbContext context,
     IConnectionMultiplexer redis,
-    IClickEventProducer clickEventProducer,
     ILogger<UrlShortenerService> logger) : IUrlShortenerService
 {
     private readonly IDatabase _cache = redis.GetDatabase();
@@ -75,7 +74,7 @@ public class UrlShortenerService(
 
             if (cachedOriginalUrl.HasValue)
             {
-                await PublishClickEventAsync(shortCode);
+                await RecordClickEventAsync(shortCode);
 
                 logger.LogDebug(
                     "Redis cache hit for short code {ShortCode}",
@@ -108,7 +107,7 @@ public class UrlShortenerService(
             return null;
         }
 
-        await PublishClickEventAsync(shortCode);
+        await RecordClickEventAsync(shortCode);
 
         try
         {
@@ -151,7 +150,7 @@ public class UrlShortenerService(
                     x => x.ClickCount + 1));
     }
 
-    private async Task PublishClickEventAsync(
+    private async Task RecordClickEventAsync(
         string shortCode,
         CancellationToken cancellationToken = default)
     {
@@ -160,19 +159,30 @@ public class UrlShortenerService(
             ShortCode: shortCode,
             OccurredAt: DateTime.UtcNow);
 
-        try
-        {
-            await clickEventProducer.PublishAsync(
-                clickEvent,
+        await using var transaction =
+            await context.Database.BeginTransactionAsync(
                 cancellationToken);
-        }
-        catch (Exception ex)
+
+        var outboxMessage = new OutboxMessage
         {
-            logger.LogWarning(
-                ex,
-                "Failed to publish click event {EventId} for short code {ShortCode}. Continuing with redirect.",
-                clickEvent.EventId,
-                clickEvent.ShortCode);
-        }
+            Id = clickEvent.EventId,
+            Type = nameof(UrlClickedEvent),
+            Payload = JsonSerializer.Serialize(clickEvent),
+            OccurredAt = clickEvent.OccurredAt,
+            PublishedAt = null,
+            AttemptCount = 0,
+            LastAttemptAt = null,
+            LastError = null
+        };
+
+        context.OutboxMessages.Add(outboxMessage);
+
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        logger.LogDebug(
+            "Click event {EventId} recorded in outbox for short code {ShortCode}",
+            clickEvent.EventId,
+            clickEvent.ShortCode);
     }
 }

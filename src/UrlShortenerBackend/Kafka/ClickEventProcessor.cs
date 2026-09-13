@@ -39,7 +39,8 @@ public class ClickEventProcessor(
 
         var stopwatch = Stopwatch.StartNew();
 
-        try{
+        try
+        {
             await using var scope =
                 scopeFactory.CreateAsyncScope();
 
@@ -62,7 +63,7 @@ public class ClickEventProcessor(
                 activity?.SetTag(
                     "urlshortener.duplicate",
                     true);
-                
+
                 UrlShortenerMetrics.DuplicateClickEvents.Add(1);
 
                 logger.LogDebug(
@@ -109,12 +110,12 @@ public class ClickEventProcessor(
 
             await transaction.CommitAsync(
                 cancellationToken);
-            
+
             UrlShortenerMetrics.ClickEventsProcessed.Add(1);
 
             activity?.SetStatus(
                 ActivityStatusCode.Ok);
-                    }
+        }
         finally
         {
             stopwatch.Stop();

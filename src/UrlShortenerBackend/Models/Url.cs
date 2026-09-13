@@ -10,5 +10,5 @@ public class Url
     public DateTime CreatedAt { get; set; }
 
     public int ClickCount { get; set; }
-    
+
 }

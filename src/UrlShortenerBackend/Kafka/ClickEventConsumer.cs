@@ -66,7 +66,8 @@ public class ClickEventConsumer(
                             static (headers, key) =>
                             {
                                 var header = headers?
-                                    .FirstOrDefault(x => x.Key == key);
+                                    .FirstOrDefault(
+                                        x => x.Key == key);
 
                                 return header is null
                                     ? Enumerable.Empty<string>()

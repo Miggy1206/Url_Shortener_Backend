@@ -8,6 +8,9 @@ namespace UrlShortenerBackend.Tests.Kafka;
 public class KafkaTestFactory(PostgresFixture postgresFixture)
     : WebApplicationFactory<Program>
 {
+    public string TopicName { get; } =
+        $"url-clicked-test-{Guid.NewGuid():N}";
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((_, config) =>
@@ -21,7 +24,7 @@ public class KafkaTestFactory(PostgresFixture postgresFixture)
                     "localhost:9093",
 
                 ["Kafka:ClickTopic"] =
-                    "url-clicked",
+                    TopicName,
 
                 ["Kafka:ConsumerGroup"] =
                     $"click-count-consumer-test-{Guid.NewGuid():N}"

@@ -41,7 +41,8 @@ public class ClickEventConsumerTests : IClassFixture<PostgresFixture>
             context.Urls.Add(
                 new Url
                 {
-                    OriginalUrl = "https://www.example.com",
+                    OriginalUrl =
+                        "https://www.example.com",
                     ShortCode = shortCode,
                     CreatedAt = DateTime.UtcNow,
                     ClickCount = 0
@@ -50,9 +51,11 @@ public class ClickEventConsumerTests : IClassFixture<PostgresFixture>
             await context.SaveChangesAsync();
         }
 
-        using var factory = new KafkaTestFactory(_postgres);
+        using var factory =
+            new KafkaTestFactory(_postgres);
 
-        using var client = factory.CreateClient();
+        using var client =
+            factory.CreateClient();
 
         var clickEvent =
             new UrlClickedEvent(
@@ -71,11 +74,12 @@ public class ClickEventConsumerTests : IClassFixture<PostgresFixture>
                 .Build();
 
         await producer.ProduceAsync(
-            "url-clicked",
+            factory.TopicName,
             new Message<string, string>
             {
                 Key = shortCode,
-                Value = JsonSerializer.Serialize(clickEvent)
+                Value =
+                    JsonSerializer.Serialize(clickEvent)
             });
 
         await WaitForClickCountAsync(
@@ -90,14 +94,19 @@ public class ClickEventConsumerTests : IClassFixture<PostgresFixture>
                 .SingleAsync(
                     x => x.ShortCode == shortCode);
 
-        Assert.Equal(1, url.ClickCount);
+        Assert.Equal(
+            1,
+            url.ClickCount);
 
         var processedEvent =
-            await verificationContext.ProcessedClickEvents
+            await verificationContext
+                .ProcessedClickEvents
                 .SingleAsync(
                     x => x.EventId == eventId);
 
-        Assert.Equal(eventId, processedEvent.EventId);
+        Assert.Equal(
+            eventId,
+            processedEvent.EventId);
     }
 
     private async Task WaitForClickCountAsync(
@@ -108,7 +117,8 @@ public class ClickEventConsumerTests : IClassFixture<PostgresFixture>
         var timeout =
             TimeSpan.FromSeconds(timeoutSeconds);
 
-        var startedAt = DateTime.UtcNow;
+        var startedAt =
+            DateTime.UtcNow;
 
         while (DateTime.UtcNow - startedAt < timeout)
         {
