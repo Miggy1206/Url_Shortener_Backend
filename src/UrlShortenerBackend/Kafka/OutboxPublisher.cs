@@ -13,9 +13,10 @@ public sealed class OutboxPublisher(
     IConfiguration configuration,
     ILogger<OutboxPublisher> logger) : BackgroundService
 {
-    private const int DefaultBatchSize = 100;
+    private const int DefaultBatchSize = 500;
     private const int DefaultPollingIntervalMs = 1000;
     private const int DefaultClaimTimeoutSeconds = 60;
+    private const int DefaultMaxConcurrentPublishes = 32;
 
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
@@ -35,11 +36,17 @@ public sealed class OutboxPublisher(
                 "Outbox:ClaimTimeoutSeconds",
                 DefaultClaimTimeoutSeconds);
 
+        var maxConcurrentPublishes =
+            configuration.GetValue(
+                "Outbox:MaxConcurrentPublishes",
+                DefaultMaxConcurrentPublishes);
+
         logger.LogInformation(
-            "Outbox publisher started with batch size {BatchSize}, polling interval {PollingIntervalMs}ms and claim timeout {ClaimTimeoutSeconds}s",
+            "Outbox publisher started with batch size {BatchSize}, polling interval {PollingIntervalMs}ms, claim timeout {ClaimTimeoutSeconds}s and max concurrent publishes {MaxConcurrentPublishes}",
             batchSize,
             pollingIntervalMs,
-            claimTimeoutSeconds);
+            claimTimeoutSeconds,
+            maxConcurrentPublishes);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -47,6 +54,7 @@ public sealed class OutboxPublisher(
                 await PublishBatchAsync(
                     batchSize,
                     claimTimeoutSeconds,
+                    maxConcurrentPublishes,
                     stoppingToken);
 
             if (!publishedAny)
@@ -64,6 +72,7 @@ public sealed class OutboxPublisher(
     private async Task<bool> PublishBatchAsync(
         int batchSize,
         int claimTimeoutSeconds,
+        int maxConcurrentPublishes,
         CancellationToken cancellationToken)
     {
         await using var scope =
@@ -96,45 +105,97 @@ public sealed class OutboxPublisher(
             return false;
         }
 
-        var publishedAny = false;
+        var attemptStartedAt =
+            DateTime.UtcNow;
 
         foreach (var message in messages)
         {
-            if (cancellationToken.IsCancellationRequested)
+            message.AttemptCount++;
+            message.LastAttemptAt = attemptStartedAt;
+        }
+
+        using var semaphore =
+            new SemaphoreSlim(
+                maxConcurrentPublishes,
+                maxConcurrentPublishes);
+
+        var tasks =
+            messages.Select(
+                message =>
+                    PublishMessageAsync(
+                        producer,
+                        message,
+                        semaphore,
+                        cancellationToken));
+
+        var results =
+            await Task.WhenAll(tasks);
+
+        foreach (var result in results)
+        {
+            var message = result.Message;
+
+            if (result.Succeeded)
             {
-                break;
+                message.PublishedAt =
+                    DateTime.UtcNow;
+
+                message.ProcessingStartedAt =
+                    null;
+
+                message.LastError =
+                    null;
             }
-
-            var published =
-                await PublishMessageAsync(
-                    context,
-                    producer,
-                    message,
-                    cancellationToken);
-
-            if (published)
+            else
             {
-                publishedAny = true;
+                message.ProcessingStartedAt =
+                    null;
+
+                message.LastError =
+                    result.Error?.ToString();
             }
         }
+
+        await context.SaveChangesAsync(
+            cancellationToken);
 
         await UpdateOutboxMetricsAsync(
             context,
             cancellationToken);
 
-        return publishedAny;
+        return results.Any(
+            result => result.Succeeded);
     }
 
-    private async Task<bool> PublishMessageAsync(
-        UrlShortenerDbContext context,
+    private async Task<PublishResult> PublishMessageAsync(
+        IClickEventProducer producer,
+        OutboxMessage message,
+        SemaphoreSlim semaphore,
+        CancellationToken cancellationToken)
+    {
+        await semaphore.WaitAsync(
+            cancellationToken);
+
+        try
+        {
+            return await PublishToKafkaAsync(
+                producer,
+                message,
+                cancellationToken);
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+    }
+
+    private async Task<PublishResult> PublishToKafkaAsync(
         IClickEventProducer producer,
         OutboxMessage message,
         CancellationToken cancellationToken)
     {
-        message.AttemptCount++;
-        message.LastAttemptAt = DateTime.UtcNow;
-
-        var stopwatch = Stopwatch.StartNew();
+        var stopwatch =
+            Stopwatch.StartNew();
 
         try
         {
@@ -158,13 +219,6 @@ public sealed class OutboxPublisher(
                 clickEvent,
                 cancellationToken);
 
-            message.PublishedAt = DateTime.UtcNow;
-            message.ProcessingStartedAt = null;
-            message.LastError = null;
-
-            await context.SaveChangesAsync(
-                cancellationToken);
-
             stopwatch.Stop();
 
             UrlShortenerMetrics.OutboxPublished.Add(1);
@@ -172,13 +226,16 @@ public sealed class OutboxPublisher(
             UrlShortenerMetrics.OutboxPublishDuration.Record(
                 stopwatch.Elapsed.TotalMilliseconds);
 
-            logger.LogInformation(
+            logger.LogDebug(
                 "Published outbox message {MessageId} for short code {ShortCode} on attempt {AttemptCount}",
                 message.Id,
                 clickEvent.ShortCode,
                 message.AttemptCount);
 
-            return true;
+            return new PublishResult(
+                message,
+                true,
+                null);
         }
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
@@ -187,12 +244,6 @@ public sealed class OutboxPublisher(
         }
         catch (Exception ex)
         {
-            message.ProcessingStartedAt = null;
-            message.LastError = ex.ToString();
-
-            await context.SaveChangesAsync(
-                cancellationToken);
-
             stopwatch.Stop();
 
             UrlShortenerMetrics.OutboxPublishFailures.Add(1);
@@ -206,7 +257,10 @@ public sealed class OutboxPublisher(
                 message.Id,
                 message.AttemptCount);
 
-            return false;
+            return new PublishResult(
+                message,
+                false,
+                ex);
         }
     }
 
@@ -234,4 +288,9 @@ public sealed class OutboxPublisher(
             backlog,
             oldestMessage);
     }
+
+    private sealed record PublishResult(
+        OutboxMessage Message,
+        bool Succeeded,
+        Exception? Error);
 }

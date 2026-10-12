@@ -7,4 +7,8 @@ public interface IClickEventProcessor
     Task ProcessAsync(
         UrlClickedEvent clickEvent,
         CancellationToken cancellationToken = default);
+
+    Task ProcessBatchAsync(
+        IEnumerable<UrlClickedEvent> clickEvents,
+        CancellationToken cancellationToken = default);
 }

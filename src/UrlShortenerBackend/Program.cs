@@ -11,7 +11,7 @@ using UrlShortenerBackend.Api.Observability;
 using OpenTelemetry.Trace;
 using Polly;
 using Polly.CircuitBreaker;
-using Microsoft.AspNetCore.Diagnostics.HealthChecks; 
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -78,30 +78,37 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("url-creation", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 5,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0,
-                AutoReplenishment = true
-            }));
+            partitionKey:
+                httpContext.Connection.RemoteIpAddress?.ToString()
+                ?? "unknown",
+            factory: _ =>
+                new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 5,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    AutoReplenishment = true
+                }));
 
     options.AddPolicy("url-redirect", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 60,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0,
-                AutoReplenishment = true
-            }));
+            partitionKey:
+                httpContext.Connection.RemoteIpAddress?.ToString()
+                ?? "unknown",
+            factory: _ =>
+                new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 60,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    AutoReplenishment = true
+                }));
 });
 
 builder.Services.AddDbContext<UrlShortenerDbContext>(options =>
     options.UseNpgsql(
-        builder.Configuration.GetConnectionString("DefaultConnection")));
+        builder.Configuration.GetConnectionString(
+            "DefaultConnection")));
 
 builder.Services.AddSingleton<IConnectionMultiplexer>(
     ConnectionMultiplexer.Connect(
@@ -129,8 +136,6 @@ builder.Services.AddSingleton<IProducer<string, string>>(
             producerConfig)
             .Build();
     });
-
-
 
 builder.Services.AddScoped<IClickEventProducer, ClickEventProducer>();
 builder.Services.AddScoped<IOutboxMessageClaimer, OutboxMessageClaimer>();
@@ -174,17 +179,19 @@ builder.Services.AddResiliencePipeline(
 
 var app = builder.Build();
 
-app.MapHealthChecks("/health/live", 
-    new HealthCheckOptions 
-    { 
-        Predicate = _ => false 
-    }); 
+app.MapHealthChecks(
+    "/health/live",
+    new HealthCheckOptions
+    {
+        Predicate = _ => false
+    });
 
-app.MapHealthChecks("/health/ready", 
-    new HealthCheckOptions 
-    { 
-        Predicate = check => 
-            check.Tags.Contains("ready") 
+app.MapHealthChecks(
+    "/health/ready",
+    new HealthCheckOptions
+    {
+        Predicate = check =>
+            check.Tags.Contains("ready")
     });
 
 app.MapHealthChecks(
@@ -214,7 +221,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
-//app.UseRateLimiter();
+app.UseRateLimiter();
 
 app.MapControllers();
 

@@ -20,6 +20,14 @@ public class HealthCheckTests : IClassFixture<PostgresFixture>
         return new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder =>
             {
+                builder.UseSetting(
+                    "Redis:ConnectionString",
+                    "localhost:6379");
+
+                builder.UseSetting(
+                    "Kafka:BootstrapServers",
+                    "localhost:9093");
+
                 builder.ConfigureServices(services =>
                 {
                     var descriptor =
@@ -75,7 +83,17 @@ public class HealthCheckTests : IClassFixture<PostgresFixture>
     public async Task LiveEndpoint_DoesNotDependOnPostgres_ReturnsOk()
     {
         using var factory =
-            new WebApplicationFactory<Program>();
+            new WebApplicationFactory<Program>()
+                .WithWebHostBuilder(builder =>
+                {
+                    builder.UseSetting(
+                        "Redis:ConnectionString",
+                        "localhost:6379");
+
+                    builder.UseSetting(
+                        "Kafka:BootstrapServers",
+                        "localhost:9093");
+                });
 
         using var client =
             factory.CreateClient();
@@ -95,6 +113,14 @@ public class HealthCheckTests : IClassFixture<PostgresFixture>
             new WebApplicationFactory<Program>()
                 .WithWebHostBuilder(builder =>
                 {
+                    builder.UseSetting(
+                        "Redis:ConnectionString",
+                        "localhost:6379");
+
+                    builder.UseSetting(
+                        "Kafka:BootstrapServers",
+                        "localhost:9093");
+
                     builder.ConfigureServices(services =>
                     {
                         var descriptor =
