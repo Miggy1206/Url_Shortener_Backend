@@ -1,34 +1,37 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using UrlShortenerBackend.Tests.Integration;
 
 namespace UrlShortenerBackend.Tests.Kafka;
 
-public class KafkaTestFactory(PostgresFixture postgresFixture)
+public class KafkaTestFactory(
+    PostgresFixture postgresFixture)
     : WebApplicationFactory<Program>
 {
     public string TopicName { get; } =
         $"url-clicked-test-{Guid.NewGuid():N}";
 
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    protected override void ConfigureWebHost(
+        IWebHostBuilder builder)
     {
-        builder.ConfigureAppConfiguration((_, config) =>
-        {
-            config.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["ConnectionStrings:DefaultConnection"] =
-                    postgresFixture.ConnectionString,
+        builder.UseSetting(
+            "ConnectionStrings:DefaultConnection",
+            postgresFixture.ConnectionString);
 
-                ["Kafka:BootstrapServers"] =
-                    "localhost:9093",
+        builder.UseSetting(
+            "Redis:ConnectionString",
+            "localhost:6379");
 
-                ["Kafka:ClickTopic"] =
-                    TopicName,
+        builder.UseSetting(
+            "Kafka:BootstrapServers",
+            "localhost:9093");
 
-                ["Kafka:ConsumerGroup"] =
-                    $"click-count-consumer-test-{Guid.NewGuid():N}"
-            });
-        });
+        builder.UseSetting(
+            "Kafka:ClickTopic",
+            TopicName);
+
+        builder.UseSetting(
+            "Kafka:ConsumerGroup",
+            $"click-count-consumer-test-{Guid.NewGuid():N}");
     }
 }

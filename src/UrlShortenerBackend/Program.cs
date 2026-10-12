@@ -11,10 +11,14 @@ using UrlShortenerBackend.Api.Observability;
 using OpenTelemetry.Trace;
 using Polly;
 using Polly.CircuitBreaker;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+
+builder.Services.AddSingleton<KafkaConsumerHealthState>();
 
 builder.Services
     .AddOpenTelemetry()
@@ -51,7 +55,17 @@ builder.Services.AddOpenApi();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddControllers();
-builder.Services.AddHealthChecks();
+
+builder.Services
+    .AddHealthChecks()
+    .AddDbContextCheck<UrlShortenerDbContext>(
+        name: "postgres",
+        tags: ["ready"])
+    .AddCheck<KafkaConsumerHealthCheck>(
+        name: "kafka-consumer",
+        tags: ["kafka"]);
+
+
 builder.Services.AddScoped<IUrlShortenerService, UrlShortenerService>();
 builder.Services.AddProblemDetails();
 builder.Services.AddScoped<IUrlRepository, UrlRepository>();
@@ -64,30 +78,37 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("url-creation", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 5,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0,
-                AutoReplenishment = true
-            }));
+            partitionKey:
+                httpContext.Connection.RemoteIpAddress?.ToString()
+                ?? "unknown",
+            factory: _ =>
+                new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 5,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    AutoReplenishment = true
+                }));
 
     options.AddPolicy("url-redirect", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 60,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0,
-                AutoReplenishment = true
-            }));
+            partitionKey:
+                httpContext.Connection.RemoteIpAddress?.ToString()
+                ?? "unknown",
+            factory: _ =>
+                new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 60,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    AutoReplenishment = true
+                }));
 });
 
 builder.Services.AddDbContext<UrlShortenerDbContext>(options =>
     options.UseNpgsql(
-        builder.Configuration.GetConnectionString("DefaultConnection")));
+        builder.Configuration.GetConnectionString(
+            "DefaultConnection")));
 
 builder.Services.AddSingleton<IConnectionMultiplexer>(
     ConnectionMultiplexer.Connect(
@@ -115,8 +136,6 @@ builder.Services.AddSingleton<IProducer<string, string>>(
             producerConfig)
             .Build();
     });
-
-
 
 builder.Services.AddScoped<IClickEventProducer, ClickEventProducer>();
 builder.Services.AddScoped<IOutboxMessageClaimer, OutboxMessageClaimer>();
@@ -160,7 +179,28 @@ builder.Services.AddResiliencePipeline(
 
 var app = builder.Build();
 
-app.MapHealthChecks("/healthz");
+app.MapHealthChecks(
+    "/health/live",
+    new HealthCheckOptions
+    {
+        Predicate = _ => false
+    });
+
+app.MapHealthChecks(
+    "/health/ready",
+    new HealthCheckOptions
+    {
+        Predicate = check =>
+            check.Tags.Contains("ready")
+    });
+
+app.MapHealthChecks(
+    "/health/kafka",
+    new HealthCheckOptions
+    {
+        Predicate = check =>
+            check.Tags.Contains("kafka")
+    });
 
 app.MapPrometheusScrapingEndpoint();
 
